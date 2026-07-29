@@ -233,8 +233,8 @@ class TicketStore:
             )
             open_count = sum(r["cnt"] for r in await cursor.fetchall())
 
-            def _breakdown(col: str) -> Dict[str, int]:
-                cursor = db.execute(
+            async def _breakdown(col: str) -> Dict[str, int]:
+                cursor = await db.execute(
                     f"SELECT json_extract(data, '$.{col}') as val, COUNT(*) as cnt"
                     f" FROM tickets WHERE json_extract(data, '$.{col}') IS NOT NULL"
                     f" AND json_extract(data, '$.{col}') != '' GROUP BY val"
@@ -245,10 +245,10 @@ class TicketStore:
                 "total": total,
                 "open": open_count,
                 "auto_sent": auto_sent,
-                "category_breakdown": _breakdown("category"),
-                "priority_breakdown": _breakdown("priority"),
-                "channel_breakdown": _breakdown("channel"),
-                "sentiment_distribution": _breakdown("sentiment"),
+                "category_breakdown": await _breakdown("category"),
+                "priority_breakdown": await _breakdown("priority"),
+                "channel_breakdown": await _breakdown("channel"),
+                "sentiment_distribution": await _breakdown("sentiment"),
             }
 
     async def update_status(self, ticket_id: str, **updates) -> Optional[Dict[str, Any]]:

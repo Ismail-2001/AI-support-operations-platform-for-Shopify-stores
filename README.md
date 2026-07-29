@@ -771,9 +771,11 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 **Ismail Sajid** — Principal AI Engineer
 
-[![Email](https://img.shields.io/badge/Email-D14836?logo=gmail&logoColor=white)](mailto:your@email.com)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-0A66C2?logo=linkedin&logoColor=white)](https://linkedin.com/in/your-linkedin)
 [![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/Ismail-2001)
+
+For inquiries about deployment, customization, or enterprise licensing:
+- Open a [GitHub Issue](https://github.com/Ismail-2001/customer-support-ai-employee/issues)
+- Connect via [GitHub Profile](https://github.com/Ismail-2001)
 
 ---
 
@@ -781,11 +783,12 @@ Distributed under the MIT License. See `LICENSE` for more information.
 
 ### 🚀 Ready to deploy your AI support agent?
 
-**Get in touch** for:
+**Let's talk** about:
 - Dedicated deployment & setup assistance
 - Custom integrations (Slack, email, CRM, etc.)
 - Enterprise SLA & support
 - Multi-store management
+- White-label licensing for agencies
 
 ---
 

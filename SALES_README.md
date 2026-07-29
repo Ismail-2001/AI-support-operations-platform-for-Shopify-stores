@@ -1,12 +1,18 @@
 # Customer Support AI Employee — for Shopify
 
-## For Shopify store owners who are tired of answering the same questions
+> **Deploy an AI agent into your Shopify store in 10 minutes. It answers orders, handles returns, suggests refunds, and escalates — all inside your Gorgias workflow.**
 
-Your customers DM you on Instagram, email support@yourstore.com, and chat on your website. They all ask the same things: "Where's my order?", "Can I return this?", "Do you have this in size M?"
+---
 
-You or your team type the same answers every day.
+## For US ecommerce brands tired of answering the same questions
 
-**This AI already knows your Shopify store.** Connect it once and it reads real order status, tracking numbers, and product data before it responds. No hallucinations. No "let me check with the team." Just answers that sound like you.
+Every day, your team answers the same 5 questions:
+
+> *"Where's my order?" — "Can I return this?" — "When will it ship?" — "Do you have this in size M?" — "I never received item #1042."*
+
+Your support team spends **60-70% of their time** on these repetitive tickets. Your customers wait hours for answers an AI could give in seconds.
+
+**cs-agent is different.** It's not a generic chatbot with a script. It connects directly to your Shopify store — reads real order status, tracking numbers, product data, and policies — before it responds. No hallucinations. No "I don't have access to that information." Just answers that sound like your best agent.
 
 ---
 
@@ -14,37 +20,49 @@ You or your team type the same answers every day.
 
 | Customer question | What the AI does |
 |---|---|
-| "Where's my order #1042?" | Pulls real tracking from Shopify, responds with status + carrier link |
-| "I want a return" | Checks your return policy from your KB, starts the process |
-| "This is the 3rd time I'm asking" | Detects escalation, flags as urgent, routes to your top agent |
-| "My order arrived damaged" | Suggests a refund amount with reason — you approve with one click |
-| "Can you resend it?" | Creates a replacement order — you approve, Shopify ships it |
-| "Is this waterproof?" | Searches your product catalog, answers from your spec sheet |
+| *"Where's my order #1042?"* | Pulls real tracking from Shopify, responds with status + carrier link |
+| *"I want a return"* | Checks your return policy from your KB, starts the process |
+| *"This is the 3rd time I'm asking"* | Detects escalation, flags as urgent, routes to your top agent |
+| *"My order arrived damaged"* | Suggests a refund amount with reason — you approve with one click |
+| *"Can you resend it?"* | Creates a replacement order — you approve, Shopify ships it |
+| *"Is this waterproof?"* | Searches your product catalog, answers from your spec sheet |
 
 ---
 
 ## How it works
 
-You keep your existing setup (Shopify + Gorgias or any helpdesk). The AI plugs in between:
+```
+Customer sends a message via email/chat/social
+        │
+        ▼
+cs-agent reads your Shopify store (real order data)
+        │
+        ▼
+cs-agent searches your policies + product catalog (RAG)
+        │
+        ▼
+cs-agent drafts a reply with a confidence score
+        │
+        ├── Confidence ≥ 85% & category allows auto-send
+        │   └── Reply sent to customer automatically
+        │
+        └── Confidence < 85% OR refund/complaint/legal category
+            └── Draft posted as internal note for human review
+```
 
-```
-Customer message → AI reads your Shopify store → AI drafts reply
-                                               →
-                         High confidence?  YES → Auto-sent to customer
-                         Needs a human?     NO → Draft for you to review
-```
+You keep your existing stack (Shopify + Gorgias). The AI plugs in between.
 
 ---
 
-## Pricing — for Shopify store owners
+## Pricing — for US Shopify stores
 
-| Plan | For who | One-time setup | Monthly |
-|------|---------|:-:|:-:|
-| Starter | 1 store, you are support | $1,800–$3,500 | $0 |
-| Growth | 1 store, you have a team | $3,500–$7,000 | $900–$1,800 |
-| Enterprise | Multiple stores | Custom | Custom |
+| Plan | For | Setup | Monthly | Best For |
+|------|-----|:-----:|:-------:|----------|
+| **Starter** | 1 store, you are support | $1,500 | $0 | Solo operators, bootstrapped brands |
+| **Growth** | 1 store + support team | $3,000 | $1,000 | Brands with 500-5000 orders/month |
+| **Enterprise** | Multiple stores | Custom | Custom | Agencies, 5+ store portfolios, custom SLA |
 
-No per-ticket fees. No usage caps. No surprise bills.
+**No per-ticket fees. No usage caps. No surprise bills.** Your only variable cost is LLM API usage (~$5-50/month depending on ticket volume).
 
 ---
 
@@ -52,34 +70,42 @@ No per-ticket fees. No usage caps. No surprise bills.
 
 | Metric | Without AI | With AI |
 |--------|:-:|:-:|
-| Response time | 4-6 hours | 2-5 minutes |
-| Tickets/agent/hour | 2-3 | 8-12 |
-| Support team size needed | 3 agents | 1 agent |
+| First response time | 4-6 hours | 2-5 minutes |
+| Tickets handled per agent per hour | 2-3 | 8-12 |
+| Support team size needed (for 500 tickets/mo) | 2-3 agents | 1 agent |
+| Monthly team cost | $8,000-12,000 | $4,000-6,000 |
 
-**Payback period: 2-3 months.**
-
----
-
-## Safety — your store, your rules
-
-- Refunds are **suggested** by AI, **approved** by you
-- Replacement orders are **created** by AI, **approved** by you
-- Low-confidence drafts never go to customers
-- Angry customers always get a human
-- Every action has an audit trail
-- You can review every draft before it sends (flip one setting)
+**Typical payback period: 1-2 months.**
 
 ---
 
-## Built for Shopify owners by someone who knows Shopify
+## Safety architecture — your store, your rules
 
-This isn't a generic chatbot. It reads your orders, your products, your policies — through your Shopify Admin API (read-only for order lookups). It speaks to your customers the way you would.
+- **Refunds** are suggested by AI, **approved** by you via one click
+- **Replacement orders** are created by AI, **approved** by you
+- **Low-confidence drafts** (< 85%) never go to customers
+- **Angry customers** (very_negative sentiment) always get a human
+- **3rd follow-up** auto-escalates to urgent + forces human review
+- **Daily cost cap** — auto-send disabled when LLM spend exceeds budget
+- **Every action has an audit trail** — who approved what, when, and which Shopify order
 
 ---
 
-## 5-minute demo
+## Built for Shopify by someone who knows Shopify
 
-I'll connect it to your Shopify store and show you handling real tickets in 5 minutes.
+This isn't a wrapper around ChatGPT with a Shopify prompt. It's a purpose-built agent that:
+- Reads your orders through the **Shopify Admin API** (read_orders scope — read-only for lookups)
+- Posts replies and internal notes through **Gorgias REST API**
+- Stores everything in **your database** (self-hosted, your data never touches a third party)
+- Runs on **your infrastructure** (Render, AWS, or any VPS)
 
-**Email:** [REPLACE WITH YOUR EMAIL]
-**LinkedIn:** [REPLACE WITH YOUR LINKEDIN PROFILE]
+---
+
+## Contact
+
+**Ismail Sajid** — Principal AI Engineer
+
+- GitHub: [github.com/Ismail-2001](https://github.com/Ismail-2001)
+- Project repo: [customer-support-ai-employee](https://github.com/Ismail-2001/customer-support-ai-employee)
+
+Schedule a 15-minute demo. I'll connect cs-agent to your Shopify store and show you handling real tickets live.

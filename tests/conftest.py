@@ -62,7 +62,9 @@ def reset_settings():
     settings.API_KEY = None
     settings.RATE_LIMIT_PER_MINUTE = 60
     settings.REFUND_RATE_LIMIT_PER_MINUTE = 10
+    settings.RESEND_RATE_LIMIT_PER_MINUTE = 10
     settings.DAILY_COST_CAP_USD = 5.0
+    settings.ENV = "development"
     yield
 
 

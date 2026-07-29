@@ -1,9 +1,9 @@
 """
 LLM client factory and retry-with-fallback wrapper.
-Primary: gpt-4o-mini via OpenRouter.  Fallback: Claude Haiku (configurable).
-Adding a third provider later only requires extending invoke_with_fallback's
-chain-of-responsibility — the call sites in classifier.py and response_engine.py
-stay the same.
+Primary resolved by get_llm() priority: Groq > Google Gemini > OpenRouter.
+Fallback: Claude Haiku (configurable, set ANTHROPIC_API_KEY).
+Adding a new provider only requires extending invoke_with_fallback's
+chain-of-responsibility — the call sites stay the same.
 """
 
 import asyncio
