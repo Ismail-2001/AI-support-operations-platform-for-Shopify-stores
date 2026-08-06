@@ -1,6 +1,6 @@
 <div align="center">
 
-# 🤖 Customer Support AI Employee
+# Customer Support AI Employee
 
 ### Deploy an AI agent into your Shopify store in 10 minutes. It answers orders, handles returns, suggests refunds, and escalates — all inside your Gorgias workflow.
 
