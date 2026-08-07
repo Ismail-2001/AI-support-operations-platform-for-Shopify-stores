@@ -9,7 +9,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, Header, Query, Request
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator
 
 from agent.auth import check_shared_secret, verify_api_key
 from agent.config import settings
@@ -66,7 +66,8 @@ class TicketCreateRequest(BaseModel):
     product_id: str | None = None
     metadata: dict[str, Any] | None = None
 
-    @validator("customer_email")
+    @field_validator("customer_email")
+    @classmethod
     def validate_email(cls, v):
         if len(v) > 254:
             raise ValueError("customer_email too long (max 254 chars)")
@@ -74,19 +75,22 @@ class TicketCreateRequest(BaseModel):
             raise ValueError("invalid email format")
         return v.strip()
 
-    @validator("body")
+    @field_validator("body")
+    @classmethod
     def validate_body(cls, v):
         if len(v) > 4000:
             raise ValueError("message body too long (max 4000 chars)")
         return v.strip()
 
-    @validator("subject")
+    @field_validator("subject")
+    @classmethod
     def validate_subject(cls, v):
         if len(v) > 200:
             raise ValueError("subject too long (max 200 chars)")
         return v.strip()
 
-    @validator("customer_name")
+    @field_validator("customer_name")
+    @classmethod
     def validate_customer_name(cls, v):
         if v and len(v) > 100:
             raise ValueError("customer_name too long (max 100 chars)")
@@ -191,7 +195,8 @@ async def update_ticket(ticket_id: str, req: TicketUpdateRequest):
 class FollowUpMessageRequest(BaseModel):
     body: str
 
-    @validator("body")
+    @field_validator("body")
+    @classmethod
     def validate_body(cls, v):
         if len(v) > 4000:
             raise ValueError("message body too long (max 4000 chars)")
@@ -550,7 +555,8 @@ class InboundMessageRequest(BaseModel):
         None  # pass the same thread_id on follow-ups from the same customer/session
     )
 
-    @validator("customer_email")
+    @field_validator("customer_email")
+    @classmethod
     def validate_email(cls, v):
         if len(v) > 254:
             raise ValueError("customer_email too long (max 254 chars)")
@@ -558,7 +564,8 @@ class InboundMessageRequest(BaseModel):
             raise ValueError("invalid email format")
         return v.strip()
 
-    @validator("body")
+    @field_validator("body")
+    @classmethod
     def validate_body(cls, v):
         if len(v) > 4000:
             raise ValueError("message body too long (max 4000 chars)")

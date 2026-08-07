@@ -116,18 +116,55 @@ CREATE INDEX IF NOT EXISTS idx_llm_costs_date ON llm_costs(date);
 
 
 class TicketStore:
+    # Bump this when you add a migration. Each migration runs in order only once.
+    SCHEMA_VERSION = 2
+
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
 
     async def init(self):
         async with aiosqlite.connect(self.db_path) as db:
             await db.executescript(_SCHEMA)
-            await self._migrate_traces(db)
+            await self._ensure_schema_version_table(db)
+            await self._run_migrations(db)
             await db.commit()
-        logger.info("ticket_store_ready", db_path=self.db_path)
+        logger.info("ticket_store_ready", db_path=self.db_path, schema_version=self.SCHEMA_VERSION)
 
-    async def _migrate_traces(self, db):
-        """Apply schema migrations in order."""
+    async def _ensure_schema_version_table(self, db):
+        """Create the schema_version table if it doesn't exist."""
+        await db.execute(
+            "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL, applied_at TEXT NOT NULL)"
+        )
+
+    async def _get_applied_version(self, db) -> int:
+        """Return the highest applied schema version, or 0 if none."""
+        cursor = await db.execute("SELECT MAX(version) FROM schema_version")
+        row = await cursor.fetchone()
+        return row[0] if row and row[0] else 0
+
+    async def _run_migrations(self, db):
+        """Run all pending migrations in order. Each migration is idempotent."""
+        applied = await self._get_applied_version(db)
+        if applied >= self.SCHEMA_VERSION:
+            return
+
+        migrations = {
+            1: self._migrate_v1,
+            2: self._migrate_v2,
+        }
+
+        for version in sorted(migrations.keys()):
+            if version > applied:
+                logger.info("schema_migration_start", from_version=applied, to_version=version)
+                await migrations[version](db)
+                await db.execute(
+                    "INSERT INTO schema_version (version, applied_at) VALUES (?, ?)",
+                    (version, datetime.now(UTC).isoformat()),
+                )
+                logger.info("schema_migration_done", version=version)
+
+    async def _migrate_v1(self, db):
+        """v1: Add prompt_version to traces, gorgias_ticket_id to tickets."""
         cursor = await db.execute("PRAGMA table_info(traces)")
         columns = [row[1] for row in await cursor.fetchall()]
         if "prompt_version" not in columns:
@@ -144,6 +181,10 @@ class TicketStore:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_tickets_gorgias_id ON tickets(gorgias_ticket_id)"
         )
+
+    async def _migrate_v2(self, db):
+        """v2: No-op placeholder. Add future migrations here."""
+        pass
 
     async def save(
         self,

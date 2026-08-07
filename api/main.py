@@ -20,12 +20,16 @@ from agent.knowledge_base import knowledge_base
 from agent.storage import store
 from api.customer_support import public_router, webhook_router
 from api.customer_support import router as support_router
+from api.errors import APIError
+from api.middleware import RequestIDMiddleware, RequestLoggingMiddleware, WebhookBodyLimitMiddleware
 
 structlog.configure(
     processors=[
         structlog.contextvars.merge_contextvars,
         structlog.processors.TimeStamper(fmt="iso"),
-        structlog.dev.ConsoleRenderer(),
+        structlog.processors.JSONRenderer()
+        if settings.ENV == "production"
+        else structlog.dev.ConsoleRenderer(),
     ]
 )
 logger = structlog.get_logger(__name__)
@@ -81,6 +85,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Middleware order matters: outermost runs first.
+# RequestIDMiddleware -> RequestLoggingMiddleware -> WebhookBodyLimitMiddleware -> CORSMiddleware
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RequestIDMiddleware)
+app.add_middleware(WebhookBodyLimitMiddleware)
+
 # CORS: only your dashboard's own domain(s) should be allowed to call this from a browser.
 # Server-to-server calls (Gorgias webhooks, your own backend) are unaffected by CORS —
 # this only restricts what a webpage's JavaScript is allowed to do.
@@ -99,17 +109,59 @@ app.include_router(webhook_router)
 app.include_router(public_router)
 
 
+@app.exception_handler(APIError)
+async def api_error_handler(request: Request, exc: APIError):
+    """Structured error responses for APIError exceptions."""
+    body = {"error": exc.error_code, "message": exc.detail}
+    if exc.error_details:
+        body["details"] = exc.error_details
+    return JSONResponse(status_code=exc.status_code, content=body)
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     # Never leak stack traces / internal details to the client — log the full thing
     # server-side and return a generic message.
     logger.error("unhandled_exception", path=request.url.path, error=str(exc))
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+    return JSONResponse(
+        status_code=500,
+        content={"error": "INTERNAL_SERVER_ERROR", "message": "Internal server error"},
+    )
 
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy", "agent": "cs-agent"}
+    """Deep health check: verifies database, knowledge base, and integration status."""
+    checks = {}
+
+    # Database check
+    try:
+        await store.analytics()
+        checks["database"] = "ok"
+    except Exception as e:
+        checks["database"] = f"error: {e}"
+
+    # Knowledge base check
+    try:
+        chunk_count = await knowledge_base.count()
+        checks["knowledge_base"] = f"ok ({chunk_count} chunks)"
+    except Exception as e:
+        checks["knowledge_base"] = f"error: {e}"
+
+    # Integration status
+    from integrations.gorgias import GorgiasClient
+    from integrations.shopify import ShopifyClient
+
+    gorgias = GorgiasClient()
+    shopify = ShopifyClient()
+
+    checks["shopify"] = "connected" if shopify.enabled else "not_configured"
+    checks["gorgias"] = "connected" if gorgias.enabled else "not_configured"
+    checks["auto_send"] = "enabled" if settings.AUTO_SEND_ENABLED else "disabled"
+
+    overall = "healthy" if checks["database"] == "ok" else "degraded"
+
+    return {"status": overall, "agent": "cs-agent", "checks": checks}
 
 
 @app.get("/")
@@ -117,6 +169,7 @@ async def root():
     return {
         "agent": "Customer Support Agent",
         "description": "AI-powered customer support automation for ecommerce",
+        "version": "2.0.0",
         "docs": "/docs",
         "health": "/health",
         "support_health": "/support/health",

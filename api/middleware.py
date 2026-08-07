@@ -14,10 +14,14 @@ from typing import ClassVar
 import structlog
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.responses import JSONResponse
 
 logger = structlog.get_logger(__name__)
 
 _API_VERSION = "2.0.0"
+
+# 1 MB — generous for webhook payloads, but prevents multi-GB memory exhaustion
+_MAX_WEBHOOK_BODY_BYTES = 1 * 1024 * 1024
 
 
 class RequestIDMiddleware(BaseHTTPMiddleware):
@@ -60,3 +64,31 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         )
 
         return response
+
+
+class WebhookBodyLimitMiddleware(BaseHTTPMiddleware):
+    """Rejects webhook requests with Content-Length exceeding the limit.
+
+    Prevents memory exhaustion from malicious or buggy senders pushing
+    multi-gigabyte payloads into request.json().
+    """
+
+    _WEBHOOK_PREFIXES: ClassVar[tuple[str, ...]] = ("/support/webhooks/",)
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if any(request.url.path.startswith(p) for p in self._WEBHOOK_PREFIXES):
+            content_length = request.headers.get("content-length")
+            if content_length and int(content_length) > _MAX_WEBHOOK_BODY_BYTES:
+                logger.warning(
+                    "webhook_body_too_large",
+                    path=request.url.path,
+                    content_length=content_length,
+                )
+                return JSONResponse(
+                    status_code=413,
+                    content={
+                        "error": "PAYLOAD_TOO_LARGE",
+                        "message": f"Webhook body exceeds {_MAX_WEBHOOK_BODY_BYTES} byte limit",
+                    },
+                )
+        return await call_next(request)
