@@ -154,7 +154,7 @@ def test_refund_without_linked_order_returns_400(client):
         json={"amount": 10},
     )
     assert r2.status_code == 400
-    assert "order_id" in r2.json()["detail"]
+    assert "order_id" in r2.json()["message"]
 
 
 def test_refund_idempotency_replays_instead_of_double_refunding(client):
@@ -253,7 +253,7 @@ def test_refund_rejects_amount_exceeding_order_total(client):
         json={"amount": 999.0},
     )
     assert r2.status_code == 400
-    assert "exceeds" in r2.json()["detail"]
+    assert "exceeds" in r2.json()["message"]
 
 
 # ── Resend order action ────────────────────────────────────────
@@ -295,7 +295,7 @@ def test_resend_order_without_linked_order_returns_400(client):
         json={},
     )
     assert r2.status_code == 400
-    assert "order_id" in r2.json()["detail"]
+    assert "order_id" in r2.json()["message"]
 
 
 def test_resend_order_idempotency_replays_instead_of_double_reordering(client):
@@ -379,7 +379,7 @@ def test_unhandled_exception_does_not_leak_internals(client):
         },
     )
     assert r.status_code == 500
-    assert r.json() == {"detail": "Internal server error"}
+    assert r.json() == {"error": "INTERNAL_SERVER_ERROR", "message": "Internal server error"}
     assert "some internal detail" not in r.text
 
 

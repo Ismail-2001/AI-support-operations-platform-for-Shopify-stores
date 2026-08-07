@@ -9,9 +9,10 @@ this to Redis (INCR + EXPIRE) so limits are shared across instances instead of p
 import time
 from collections import defaultdict, deque
 
-from fastapi import HTTPException, Request
+from fastapi import Request
 
 from agent.config import settings
+from api.errors import raise_rate_limited
 
 # ip -> deque of request timestamps within the current window
 _request_log: dict[str, deque[float]] = defaultdict(deque)
@@ -26,10 +27,7 @@ def _check_rate_limit(client_ip: str, limit_per_minute: int) -> None:
         log.popleft()
 
     if len(log) >= limit_per_minute:
-        raise HTTPException(
-            status_code=429,
-            detail=f"Rate limit exceeded ({limit_per_minute}/minute). Try again shortly.",
-        )
+        raise_rate_limited(limit_per_minute)
     log.append(now)
 
 

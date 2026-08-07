@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 from pydantic import BaseModel, validator
 
 from agent.auth import check_shared_secret, verify_api_key
@@ -23,6 +23,12 @@ from agent.models import (
 from agent.rate_limit import rate_limit_default, rate_limit_refund, rate_limit_resend
 from agent.storage import store
 from agent.support_agent import CustomerSupportAgent
+from api.errors import (
+    APIError,
+    raise_not_configured,
+    raise_not_found,
+    raise_unprocessable,
+)
 from integrations.gorgias import GorgiasClient, GorgiasNotConfigured
 from integrations.shopify import ShopifyNotConfigured
 
@@ -168,7 +174,7 @@ async def list_tickets(
 async def get_ticket(ticket_id: str):
     row = await store.get(ticket_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
     return {**row["ticket"], "suggestion": row["suggestion"], "auto_sent": row["auto_sent"]}
 
 
@@ -178,7 +184,7 @@ async def update_ticket(ticket_id: str, req: TicketUpdateRequest):
         ticket_id, status=req.status, priority=req.priority, resolution_notes=req.resolution_notes
     )
     if not updated:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
     return {"ticket_id": ticket_id, "ticket": updated["ticket"]}
 
 
@@ -199,7 +205,7 @@ async def add_followup_message(ticket_id: str, req: FollowUpMessageRequest):
     webhook should call for anything after the first message."""
     decision = await _agent.handle_followup(ticket_id, req.body)
     if not decision:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
     return {
         "ticket_id": ticket_id,
         "classification": decision.classification.model_dump(),
@@ -215,7 +221,7 @@ async def get_thread(ticket_id: str):
     if not messages:
         row = await store.get(ticket_id)
         if not row:
-            raise HTTPException(status_code=404, detail="Ticket not found")
+            raise_not_found("ticket", ticket_id)
     return {"ticket_id": ticket_id, "messages": [m.model_dump() for m in messages]}
 
 
@@ -226,9 +232,11 @@ async def get_thread(ticket_id: str):
 async def get_response_suggestion(ticket_id: str):
     row = await store.get(ticket_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
     if not row["suggestion"]:
-        raise HTTPException(status_code=404, detail="No suggestion generated for this ticket yet")
+        raise APIError(
+            code="NO_SUGGESTION", message="No suggestion generated for this ticket yet", status=404
+        )
     return {"ticket_id": ticket_id, "suggestion": row["suggestion"]}
 
 
@@ -238,16 +246,20 @@ async def respond_to_ticket(ticket_id: str, req: ResponseRequest):
     call it from your agent dashboard's 'Send' button."""
     row = await store.get(ticket_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
 
     gorgias_ticket_id = row["ticket"].get("gorgias_ticket_id")
     if req.send_via_gorgias:
         if not gorgias_ticket_id:
-            raise HTTPException(status_code=400, detail="Ticket has no linked Gorgias ticket")
+            raise APIError(
+                code="NO_GORGIAS_LINK",
+                message="Ticket has no linked Gorgias ticket",
+                status=400,
+            )
         try:
             await _gorgias.post_reply(gorgias_ticket_id, req.response)
         except GorgiasNotConfigured:
-            raise HTTPException(status_code=400, detail="Gorgias is not configured")
+            raise_not_configured("Gorgias")
 
     # Self-improvement tracking: if this ticket had an AI draft, compare it to what was
     # actually sent. High edit rates on a category are the signal to improve that prompt
@@ -312,29 +324,33 @@ async def approve_refund(
 
     row = await store.get(ticket_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
     order_id = row["ticket"].get("order_id")
     if not order_id:
-        raise HTTPException(
-            status_code=400, detail="Ticket has no linked order_id — look up the order first"
+        raise APIError(
+            code="NO_ORDER_LINKED",
+            message="Ticket has no linked order_id — look up the order first",
+            status=400,
         )
 
     if req.amount <= 0:
-        raise HTTPException(status_code=400, detail="Refund amount must be positive")
+        raise_unprocessable("Refund amount must be positive")
 
     try:
         order = await _agent.shopify.get_order_by_id(order_id)
     except ShopifyNotConfigured:
-        raise HTTPException(status_code=400, detail="Shopify is not configured")
+        raise_not_configured("Shopify")
 
     if not order:
-        raise HTTPException(status_code=404, detail=f"Order {order_id} not found in Shopify")
+        raise_not_found("order", order_id)
 
     order_total = float(order.get("total_price", 0))
     if req.amount > order_total:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Refund amount {req.amount} exceeds order total {order_total} — refusing to process",
+        raise APIError(
+            code="REFUND_EXCEEDS_TOTAL",
+            message=f"Refund amount {req.amount} exceeds order total {order_total} — refusing to process",
+            status=400,
+            details={"amount": req.amount, "order_total": order_total},
         )
 
     try:
@@ -355,7 +371,7 @@ async def approve_refund(
             status="failed",
             error=str(e),
         )
-        raise HTTPException(status_code=502, detail=f"Refund failed: {e}")
+        raise APIError(code="REFUND_FAILED", message=f"Refund failed: {e}", status=502) from e
 
     await store.record_refund_audit(
         idempotency_key,
@@ -410,20 +426,22 @@ async def approve_resend_order(
 
     row = await store.get(ticket_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
     order_id = row["ticket"].get("order_id")
     if not order_id:
-        raise HTTPException(
-            status_code=400, detail="Ticket has no linked order_id — look up the order first"
+        raise APIError(
+            code="NO_ORDER_LINKED",
+            message="Ticket has no linked order_id — look up the order first",
+            status=400,
         )
 
     try:
         order = await _agent.shopify.get_order_by_id(order_id)
     except ShopifyNotConfigured:
-        raise HTTPException(status_code=400, detail="Shopify is not configured")
+        raise_not_configured("Shopify")
 
     if not order:
-        raise HTTPException(status_code=404, detail=f"Order {order_id} not found in Shopify")
+        raise_not_found("order", order_id)
 
     try:
         result = await _agent.shopify.create_reorder(
@@ -434,7 +452,7 @@ async def approve_resend_order(
         await store.record_resend_audit(
             idempotency_key, ticket_id, order_id, status="failed", error=str(e)
         )
-        raise HTTPException(status_code=502, detail=f"Resend failed: {e}")
+        raise APIError(code="RESEND_FAILED", message=f"Resend failed: {e}", status=502) from e
 
     await store.record_resend_audit(
         idempotency_key,
@@ -477,7 +495,7 @@ async def sync_knowledge_from_shopify():
     them as knowledge base content. Run this once after setup and again whenever policies
     or the catalog change meaningfully."""
     if not _agent.shopify.enabled:
-        raise HTTPException(status_code=400, detail="Shopify is not configured")
+        raise_not_configured("Shopify")
 
     total_chunks = 0
     try:
@@ -496,7 +514,7 @@ async def sync_knowledge_from_shopify():
                 source, p.get("title", "Untitled product"), content
             )
     except ShopifyNotConfigured:
-        raise HTTPException(status_code=400, detail="Shopify is not configured")
+        raise_not_configured("Shopify")
 
     return {"status": "synced", "total_chunks": total_chunks}
 
@@ -767,7 +785,7 @@ async def get_ticket_trace(ticket_id: str):
     in call order. This is what you pull up when a client asks 'why did the bot say that?'"""
     row = await store.get(ticket_id)
     if not row:
-        raise HTTPException(status_code=404, detail="Ticket not found")
+        raise_not_found("ticket", ticket_id)
     traces = await store.get_traces(ticket_id)
     return {"ticket_id": ticket_id, "trace_count": len(traces), "traces": traces}
 
