@@ -144,7 +144,8 @@ def build_agent_graph(classifier, response_engine, shopify):
         query = history[-1].content if history else ticket.body
         try:
             chunks = await knowledge_base.search(query, top_k=3)
-        except Exception:
+        except Exception as e:
+            logger.warning("kb_search_failed", error=str(e), ticket_id=ticket.id)
             return {"knowledge_context": None, "kb_used": False}
 
         if not chunks:

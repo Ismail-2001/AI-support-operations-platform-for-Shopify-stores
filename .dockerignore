@@ -33,7 +33,15 @@ env/
 *.swo
 *~
 
-# Testing
+# Testing & dev (not needed in production image)
+tests/
+evals/
+scripts/
+requirements-dev.txt
+Makefile
+.pre-commit-config.yaml
+*.md
+.github/
 .pytest_cache/
 .coverage
 htmlcov/

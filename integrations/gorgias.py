@@ -16,22 +16,19 @@ class GorgiasNotConfigured(Exception):
     pass
 
 
-_EXP_BACKOFF = dict(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=8),
-)
+_EXP_BACKOFF = {
+    "stop": stop_after_attempt(3),
+    "wait": wait_exponential(multiplier=1, min=1, max=8),
+}
 
 
 def _is_transient_gorgias_error(exc: BaseException) -> bool:
     """Transient = 5xx server error, timeout, or connection error.
     4xx client errors are never retried — they mean the request itself is wrong."""
-    if isinstance(exc, httpx.TimeoutException):
-        return True
-    if isinstance(exc, httpx.TransportError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600:
-        return True
-    return False
+    return (
+        isinstance(exc, httpx.TimeoutException | httpx.TransportError)
+        or (isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600)
+    )
 
 
 def _log_retry_attempt(retry_state) -> None:

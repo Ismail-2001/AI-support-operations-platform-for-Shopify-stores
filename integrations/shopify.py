@@ -15,28 +15,25 @@ class ShopifyNotConfigured(Exception):
     pass
 
 
-_EXP_BACKOFF = dict(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(multiplier=1, min=1, max=8),
-)
+_EXP_BACKOFF = {
+    "stop": stop_after_attempt(3),
+    "wait": wait_exponential(multiplier=1, min=1, max=8),
+}
 
 
 def _is_transient_shopify_error(exc: BaseException) -> bool:
     """Transient = 5xx server error, timeout, or connection error.
     4xx client errors are never retried — they mean the request itself is wrong."""
-    if isinstance(exc, httpx.TimeoutException):
-        return True
-    if isinstance(exc, httpx.TransportError):
-        return True
-    if isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600:
-        return True
-    return False
+    return (
+        isinstance(exc, httpx.TimeoutException | httpx.TransportError)
+        or (isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600)
+    )
 
 
 def _is_timeout_or_connection_error(exc: BaseException) -> bool:
     """Strict predicate for create_refund — never retry a 5xx or 4xx, since the
     refund *may* have been accepted by Shopify even if the response was lost."""
-    return isinstance(exc, (httpx.TimeoutException, httpx.TransportError))
+    return isinstance(exc, httpx.TimeoutException | httpx.TransportError)
 
 
 def _log_retry_attempt(retry_state) -> None:

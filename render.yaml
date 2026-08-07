@@ -20,7 +20,7 @@ services:
       - key: TENANT_NAME
         sync: false
 
-      # ── LLM (primary: Groq > OpenRouter > Gemini; fallback: Claude) ──
+      # ── LLM (primary: Groq > Gemini > OpenRouter; fallback: Claude) ──
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL
@@ -33,6 +33,8 @@ services:
         sync: false
       - key: FALLBACK_MODEL
         value: claude-haiku-4-5-20251001
+      - key: GOOGLE_API_KEY
+        sync: false
 
       # ── Shopify ─────────────────────────────────────────
       - key: SHOPIFY_SHOP_DOMAIN

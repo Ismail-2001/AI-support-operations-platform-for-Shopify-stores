@@ -13,6 +13,7 @@ services:
       - OPENROUTER_MODEL=${OPENROUTER_MODEL:-openai/gpt-4o-mini}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - FALLBACK_MODEL=${FALLBACK_MODEL:-claude-haiku-4-5-20251001}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
       # ── Shopify ─────────────────────────────────────────
       - SHOPIFY_SHOP_DOMAIN=${SHOPIFY_SHOP_DOMAIN:-}
       - SHOPIFY_ACCESS_TOKEN=${SHOPIFY_ACCESS_TOKEN:-}
@@ -26,7 +27,7 @@ services:
       - AUTO_SEND_MIN_CONFIDENCE=${AUTO_SEND_MIN_CONFIDENCE:-0.85}
       - AUTO_SEND_BLOCKED_CATEGORIES=${AUTO_SEND_BLOCKED_CATEGORIES:-refund,complaint,legal,other}
       # ── Storage ─────────────────────────────────────────
-      - DB_PATH=${DB_PATH:-cs_agent.db}
+      - DB_PATH=${DB_PATH:-/app/data/cs_agent.db}
       - ENV=${ENV:-development}
       # ── API Security ────────────────────────────────────
       - API_KEY=${API_KEY}
@@ -42,7 +43,7 @@ services:
       - cs-agent-data:/app/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health')"]
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
       interval: 30s
       timeout: 10s
       retries: 3

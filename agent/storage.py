@@ -124,6 +124,7 @@ class TicketStore:
 
     async def init(self):
         async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("PRAGMA journal_mode=WAL")
             await db.executescript(_SCHEMA)
             await self._ensure_schema_version_table(db)
             await self._run_migrations(db)

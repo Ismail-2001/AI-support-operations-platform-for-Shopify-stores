@@ -596,9 +596,7 @@ async def generic_inbound_message(
                 "auto_sent": decision.auto_sent if decision else False,
             }
 
-    ticket_id = (
-        f"inbound_{uuid.uuid4().hex[:12]}" if req.thread_id else f"inbound_{uuid.uuid4().hex[:12]}"
-    )
+    ticket_id = f"inbound_{uuid.uuid4().hex[:12]}"
     ticket = SupportTicket(
         id=ticket_id,
         customer_email=req.customer_email,
