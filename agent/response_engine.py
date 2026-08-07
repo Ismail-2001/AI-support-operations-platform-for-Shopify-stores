@@ -6,7 +6,6 @@ either direction costs the client either a support agent's time or a bad
 customer experience, so the model is explicitly told to be skeptical of itself.
 """
 
-import re
 import time
 
 import structlog
@@ -24,18 +23,11 @@ from agent.models import (
     TicketMessage,
 )
 from agent.observability import record_llm_call
+from agent.utils import redact_pii
 
 logger = structlog.get_logger(__name__)
 
 PROMPT_VERSION = "response_v1"
-
-
-def _redact_pii(text: str) -> str:
-    """Mask emails and phone numbers before sending to the LLM.
-    The LLM doesn't need real PII to draft responses — it only needs the structure."""
-    text = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "[EMAIL REDACTED]", text)
-    text = re.sub(r"(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", "[PHONE REDACTED]", text)
-    return text
 
 
 SYSTEM_PROMPT = """You are drafting a customer support reply for an ecommerce brand.
@@ -117,8 +109,8 @@ class ResponseGenerationEngine:
         order_block = order_context or "No order data available for this ticket."
         kb_block = knowledge_context or "No knowledge base content found for this query."
         transcript = format_transcript(history) if history else f"Customer: {ticket.body}"
-        redacted_transcript = _redact_pii(transcript)
-        redacted_customer = _redact_pii(ticket.customer_name or ticket.customer_email)
+        redacted_transcript = redact_pii(transcript)
+        redacted_customer = redact_pii(ticket.customer_name or ticket.customer_email)
 
         messages = [
             ("system", SYSTEM_PROMPT),

@@ -25,18 +25,11 @@ from agent.models import (
     TicketPriority,
 )
 from agent.observability import record_llm_call
+from agent.utils import redact_pii
 
 logger = structlog.get_logger(__name__)
 
 PROMPT_VERSION = "classifier_v1"
-
-
-def _redact_pii(text: str) -> str:
-    """Mask emails and phone numbers before sending to the LLM.
-    The LLM doesn't need real PII to classify tickets — it only needs the structure."""
-    text = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "[EMAIL REDACTED]", text)
-    text = re.sub(r"(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", "[PHONE REDACTED]", text)
-    return text
 
 
 SYSTEM_PROMPT = """You are a senior ecommerce customer support triage specialist.
@@ -102,8 +95,8 @@ class TicketClassifier:
         self, ticket: SupportTicket, history: list[TicketMessage] | None = None
     ) -> ClassificationResult:
         transcript = format_transcript(history) if history else f"Customer: {ticket.body}"
-        redacted_transcript = _redact_pii(transcript)
-        redacted_email = _redact_pii(ticket.customer_email)
+        redacted_transcript = redact_pii(transcript)
+        redacted_email = redact_pii(ticket.customer_email)
 
         messages = [
             ("system", SYSTEM_PROMPT),

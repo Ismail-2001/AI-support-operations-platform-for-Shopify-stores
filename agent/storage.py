@@ -232,7 +232,11 @@ class TicketStore:
             )
             open_count = sum(r["cnt"] for r in await cursor.fetchall())
 
+            _ALLOWED_BREAKDOWN_COLS = {"category", "priority", "channel", "sentiment"}
+
             async def _breakdown(col: str) -> dict[str, int]:
+                if col not in _ALLOWED_BREAKDOWN_COLS:
+                    raise ValueError(f"Invalid breakdown column: {col}")
                 cursor = await db.execute(
                     f"SELECT json_extract(data, '$.{col}') as val, COUNT(*) as cnt"
                     f" FROM tickets WHERE json_extract(data, '$.{col}') IS NOT NULL"
