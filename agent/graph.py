@@ -10,7 +10,7 @@ unchanged — only _process() is swapped to invoke the graph.
 """
 
 import time
-from typing import Any, Dict, List, Optional, TypedDict
+from typing import Any, TypedDict
 
 import structlog
 from langgraph.graph import END, START, StateGraph
@@ -32,21 +32,24 @@ ORDER_RELEVANT_CATEGORIES = {"order_status", "shipping", "returns", "refund"}
 KB_RELEVANT_CATEGORIES = {"product_question", "returns", "refund", "shipping", "technical", "other"}
 REPEAT_CONTACT_ESCALATION_THRESHOLD = 3
 _PRIORITY_ORDER = [
-    TicketPriority.LOW, TicketPriority.NORMAL, TicketPriority.HIGH,
-    TicketPriority.URGENT, TicketPriority.CRITICAL,
+    TicketPriority.LOW,
+    TicketPriority.NORMAL,
+    TicketPriority.HIGH,
+    TicketPriority.URGENT,
+    TicketPriority.CRITICAL,
 ]
 
 
 class AgentState(TypedDict):
     ticket: SupportTicket
-    history: List[TicketMessage]
+    history: list[TicketMessage]
     customer_message_count: int
-    classification: Optional[ClassificationResult]
-    order_context: Optional[str]
+    classification: ClassificationResult | None
+    order_context: str | None
     order_used: bool
-    knowledge_context: Optional[str]
+    knowledge_context: str | None
     kb_used: bool
-    suggestion: Optional[ResponseSuggestion]
+    suggestion: ResponseSuggestion | None
     auto_sent: bool
 
 
@@ -61,23 +64,21 @@ def build_agent_graph(classifier, response_engine, shopify):
 
     # ── Node implementations ─────────────────────────────────────
 
-    async def load_history(state: AgentState) -> Dict[str, Any]:
+    async def load_history(state: AgentState) -> dict[str, Any]:
         from agent.storage import store
 
         history = await store.get_messages(state["ticket"].id)
-        customer_message_count = sum(
-            1 for m in history if m.sender_type.value == "customer"
-        )
+        customer_message_count = sum(1 for m in history if m.sender_type.value == "customer")
         return {
             "history": history,
             "customer_message_count": customer_message_count,
         }
 
-    async def classify_ticket(state: AgentState) -> Dict[str, Any]:
+    async def classify_ticket(state: AgentState) -> dict[str, Any]:
         result = await classifier.classify(state["ticket"], history=state["history"])
         return {"classification": result}
 
-    async def apply_escalation(state: AgentState) -> Dict[str, Any]:
+    async def apply_escalation(state: AgentState) -> dict[str, Any]:
         classification = state["classification"]
         count = state["customer_message_count"]
         if count >= REPEAT_CONTACT_ESCALATION_THRESHOLD:
@@ -95,7 +96,7 @@ def build_agent_graph(classifier, response_engine, shopify):
                 )
         return {"classification": classification}
 
-    async def fetch_order_context(state: AgentState) -> Dict[str, Any]:
+    async def fetch_order_context(state: AgentState) -> dict[str, Any]:
         ticket = state["ticket"]
         classification = state["classification"]
         if classification.category.value not in ORDER_RELEVANT_CATEGORIES:
@@ -130,7 +131,7 @@ def build_agent_graph(classifier, response_engine, shopify):
         context = shopify.summarize_order(order)
         return {"order_context": context, "order_used": True, "ticket": ticket}
 
-    async def fetch_knowledge_context(state: AgentState) -> Dict[str, Any]:
+    async def fetch_knowledge_context(state: AgentState) -> dict[str, Any]:
         from agent.knowledge_base import knowledge_base
 
         classification = state["classification"]
@@ -152,9 +153,10 @@ def build_agent_graph(classifier, response_engine, shopify):
         block = "\n\n---\n\n".join(f"[{c.source}] {c.title}\n{c.content}" for c in chunks)
         return {"knowledge_context": block, "kb_used": True}
 
-    async def generate_response(state: AgentState) -> Dict[str, Any]:
+    async def generate_response(state: AgentState) -> dict[str, Any]:
         suggestion = await response_engine.generate_suggestion(
-            state["ticket"], state["classification"],
+            state["ticket"],
+            state["classification"],
             order_context=state["order_context"],
             knowledge_context=state["knowledge_context"],
             history=state["history"],
@@ -163,7 +165,7 @@ def build_agent_graph(classifier, response_engine, shopify):
             suggestion.requires_human_review = True
         return {"suggestion": suggestion}
 
-    async def decide_auto_send(state: AgentState) -> Dict[str, Any]:
+    async def decide_auto_send(state: AgentState) -> dict[str, Any]:
         suggestion = state["suggestion"]
         classification = state["classification"]
 
@@ -186,7 +188,7 @@ def build_agent_graph(classifier, response_engine, shopify):
 
         return {"auto_sent": True}
 
-    async def save_results(state: AgentState) -> Dict[str, Any]:
+    async def save_results(state: AgentState) -> dict[str, Any]:
         from agent.storage import store
 
         ticket = state["ticket"]
@@ -201,7 +203,9 @@ def build_agent_graph(classifier, response_engine, shopify):
         await store.save(ticket, suggestion, auto_sent=auto_sent)
 
         if auto_sent:
-            await store.add_message(ticket.id, MessageSender.AI.value, suggestion.suggested_response)
+            await store.add_message(
+                ticket.id, MessageSender.AI.value, suggestion.suggested_response
+            )
 
         logger.info(
             "ticket_handled",
@@ -248,7 +252,8 @@ def build_agent_graph(classifier, response_engine, shopify):
 
 def _traced_node(name: str, fn):
     """Wrap a graph node with timing + trace logging to /tickets/{id}/trace."""
-    async def wrapper(state: AgentState) -> Dict[str, Any]:
+
+    async def wrapper(state: AgentState) -> dict[str, Any]:
         start = time.monotonic()
         try:
             return await fn(state)
@@ -259,4 +264,5 @@ def _traced_node(name: str, fn):
                 node_name=name,
                 latency_ms=latency_ms,
             )
+
     return wrapper

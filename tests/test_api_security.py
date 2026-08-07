@@ -14,8 +14,8 @@ from pydantic import SecretStr
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agent.config import settings
 import agent.rate_limit as rate_limit_module
+from agent.config import settings
 from tests.conftest import FakeClassifier, FakeResponseEngine, FakeShopify
 
 
@@ -27,6 +27,7 @@ def client(tmp_path, monkeypatch):
     settings.DB_PATH = str(tmp_path / "test_api.db")
     # Update the module-level store singleton's db_path — it caches at import time
     from agent.storage import store as _store
+
     _store.db_path = settings.DB_PATH
     settings.REQUIRE_API_KEY = True
     settings.API_KEY = SecretStr("test-key-123")
@@ -37,8 +38,10 @@ def client(tmp_path, monkeypatch):
     rate_limit_module._request_log.clear()
 
     import importlib
-    import api.main as main_module
+
     import api.customer_support as cs_module
+    import api.main as main_module
+
     importlib.reload(cs_module)
     importlib.reload(main_module)
 
@@ -133,9 +136,15 @@ def test_refund_on_nonexistent_ticket_returns_404(client):
 
 def test_refund_without_linked_order_returns_400(client):
     c, _ = client
-    r = c.post("/support/tickets", headers=AUTH, json={
-        "customer_email": "a@b.com", "subject": "test", "body": "test",
-    })
+    r = c.post(
+        "/support/tickets",
+        headers=AUTH,
+        json={
+            "customer_email": "a@b.com",
+            "subject": "test",
+            "body": "test",
+        },
+    )
     assert r.status_code == 200
     ticket_id = r.json()["ticket_id"]
 
@@ -169,25 +178,39 @@ def test_refund_idempotency_replays_instead_of_double_refunding(client):
     fake_shopify = FakeShopifyWithRefund()
     cs_module._agent.shopify = fake_shopify
 
-    r = c.post("/support/tickets", headers=AUTH, json={
-        "customer_email": "a@b.com", "subject": "test", "body": "test",
-    })
+    r = c.post(
+        "/support/tickets",
+        headers=AUTH,
+        json={
+            "customer_email": "a@b.com",
+            "subject": "test",
+            "body": "test",
+        },
+    )
     ticket_id = r.json()["ticket_id"]
 
     # Manually attach an order_id the way a real order-related ticket would get one
     asyncio.run(
-        __import__("agent.storage", fromlist=["store"]).store.update_status(ticket_id, order_id="999")
+        __import__("agent.storage", fromlist=["store"]).store.update_status(
+            ticket_id, order_id="999"
+        )
     )
 
     headers = {**AUTH, "Idempotency-Key": "same-key-used-twice"}
-    r1 = c.post(f"/support/tickets/{ticket_id}/actions/refund", headers=headers, json={"amount": 20.0})
-    r2 = c.post(f"/support/tickets/{ticket_id}/actions/refund", headers=headers, json={"amount": 20.0})
+    r1 = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund", headers=headers, json={"amount": 20.0}
+    )
+    r2 = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund", headers=headers, json={"amount": 20.0}
+    )
 
     assert r1.status_code == 200
     assert r2.status_code == 200
     assert r1.json()["replayed"] is False
     assert r2.json()["replayed"] is True
-    assert fake_shopify.call_count == 1, "create_refund must only be called ONCE across both requests"
+    assert (
+        fake_shopify.call_count == 1
+    ), "create_refund must only be called ONCE across both requests"
 
 
 def test_refund_rejects_amount_exceeding_order_total(client):
@@ -202,16 +225,26 @@ def test_refund_rejects_amount_exceeding_order_total(client):
             return {"id": order_id, "total_price": "50.00"}
 
         async def create_refund(self, **kwargs):
-            raise AssertionError("create_refund should never be called when amount exceeds order total")
+            raise AssertionError(
+                "create_refund should never be called when amount exceeds order total"
+            )
 
     cs_module._agent.shopify = FakeShopifyCapped()
 
-    r = c.post("/support/tickets", headers=AUTH, json={
-        "customer_email": "a@b.com", "subject": "test", "body": "test",
-    })
+    r = c.post(
+        "/support/tickets",
+        headers=AUTH,
+        json={
+            "customer_email": "a@b.com",
+            "subject": "test",
+            "body": "test",
+        },
+    )
     ticket_id = r.json()["ticket_id"]
     asyncio.run(
-        __import__("agent.storage", fromlist=["store"]).store.update_status(ticket_id, order_id="999")
+        __import__("agent.storage", fromlist=["store"]).store.update_status(
+            ticket_id, order_id="999"
+        )
     )
 
     r2 = c.post(
@@ -244,9 +277,15 @@ def test_resend_order_on_nonexistent_ticket_returns_404(client):
 
 def test_resend_order_without_linked_order_returns_400(client):
     c, _ = client
-    r = c.post("/support/tickets", headers=AUTH, json={
-        "customer_email": "a@b.com", "subject": "test", "body": "test",
-    })
+    r = c.post(
+        "/support/tickets",
+        headers=AUTH,
+        json={
+            "customer_email": "a@b.com",
+            "subject": "test",
+            "body": "test",
+        },
+    )
     assert r.status_code == 200
     ticket_id = r.json()["ticket_id"]
 
@@ -274,18 +313,30 @@ def test_resend_order_idempotency_replays_instead_of_double_reordering(client):
 
         async def create_reorder(self, order_id, notify_customer=True):
             self.call_count += 1
-            return {"new_order_id": 888, "original_order_id": order_id, "call_number": self.call_count}
+            return {
+                "new_order_id": 888,
+                "original_order_id": order_id,
+                "call_number": self.call_count,
+            }
 
     fake_shopify = FakeShopifyWithResend()
     cs_module._agent.shopify = fake_shopify
 
-    r = c.post("/support/tickets", headers=AUTH, json={
-        "customer_email": "a@b.com", "subject": "test", "body": "test",
-    })
+    r = c.post(
+        "/support/tickets",
+        headers=AUTH,
+        json={
+            "customer_email": "a@b.com",
+            "subject": "test",
+            "body": "test",
+        },
+    )
     ticket_id = r.json()["ticket_id"]
 
     asyncio.run(
-        __import__("agent.storage", fromlist=["store"]).store.update_status(ticket_id, order_id="999")
+        __import__("agent.storage", fromlist=["store"]).store.update_status(
+            ticket_id, order_id="999"
+        )
     )
 
     headers = {**AUTH, "Idempotency-Key": "resend-same-key"}
@@ -296,7 +347,9 @@ def test_resend_order_idempotency_replays_instead_of_double_reordering(client):
     assert r2.status_code == 200
     assert r1.json()["replayed"] is False
     assert r2.json()["replayed"] is True
-    assert fake_shopify.call_count == 1, "create_reorder must only be called ONCE across both requests"
+    assert (
+        fake_shopify.call_count == 1
+    ), "create_reorder must only be called ONCE across both requests"
 
 
 def test_rate_limit_returns_429_when_exceeded(client):
@@ -316,9 +369,15 @@ def test_unhandled_exception_does_not_leak_internals(client):
 
     cs_module._agent.classifier = BrokenClassifier()
 
-    r = c.post("/support/tickets", headers=AUTH, json={
-        "customer_email": "a@b.com", "subject": "test", "body": "test",
-    })
+    r = c.post(
+        "/support/tickets",
+        headers=AUTH,
+        json={
+            "customer_email": "a@b.com",
+            "subject": "test",
+            "body": "test",
+        },
+    )
     assert r.status_code == 500
     assert r.json() == {"detail": "Internal server error"}
     assert "some internal detail" not in r.text
@@ -333,14 +392,20 @@ def test_gorgias_webhook_idempotency_duplicate_event_id(client):
 
     call_count = [0]
     original = cs_module._agent.handle_ticket
+
     async def counting_handle_ticket(ticket):
         call_count[0] += 1
         return await original(ticket)
+
     cs_module._agent.handle_ticket = counting_handle_ticket
 
     payload = {
         "id": "evt-dup-001",
-        "ticket": {"id": 5001, "customer": {"email": "a@b.com"}, "messages": [{"body_text": "Help"}]},
+        "ticket": {
+            "id": 5001,
+            "customer": {"email": "a@b.com"},
+            "messages": [{"body_text": "Help"}],
+        },
     }
     headers = {"x-webhook-secret": "gorgias-secret"}
 
@@ -363,21 +428,39 @@ def test_gorgias_webhook_idempotency_different_event_ids(client):
 
     call_count = [0]
     original = cs_module._agent.handle_ticket
+
     async def counting_handle_ticket(ticket):
         call_count[0] += 1
         return await original(ticket)
+
     cs_module._agent.handle_ticket = counting_handle_ticket
 
     headers = {"x-webhook-secret": "gorgias-secret"}
 
-    r1 = c.post("/support/webhooks/gorgias/ticket-created", headers=headers, json={
-        "id": "evt-diff-001",
-        "ticket": {"id": 5002, "customer": {"email": "a@b.com"}, "messages": [{"body_text": "First"}]},
-    })
-    r2 = c.post("/support/webhooks/gorgias/ticket-created", headers=headers, json={
-        "id": "evt-diff-002",
-        "ticket": {"id": 5003, "customer": {"email": "a@b.com"}, "messages": [{"body_text": "Second"}]},
-    })
+    r1 = c.post(
+        "/support/webhooks/gorgias/ticket-created",
+        headers=headers,
+        json={
+            "id": "evt-diff-001",
+            "ticket": {
+                "id": 5002,
+                "customer": {"email": "a@b.com"},
+                "messages": [{"body_text": "First"}],
+            },
+        },
+    )
+    r2 = c.post(
+        "/support/webhooks/gorgias/ticket-created",
+        headers=headers,
+        json={
+            "id": "evt-diff-002",
+            "ticket": {
+                "id": 5003,
+                "customer": {"email": "a@b.com"},
+                "messages": [{"body_text": "Second"}],
+            },
+        },
+    )
 
     assert r1.status_code == 200
     assert r2.status_code == 200
@@ -392,14 +475,20 @@ def test_gorgias_webhook_idempotency_missing_event_id(client):
 
     call_count = [0]
     original = cs_module._agent.handle_ticket
+
     async def counting_handle_ticket(ticket):
         call_count[0] += 1
         return await original(ticket)
+
     cs_module._agent.handle_ticket = counting_handle_ticket
 
     headers = {"x-webhook-secret": "gorgias-secret"}
     payload = {
-        "ticket": {"id": 5004, "customer": {"email": "a@b.com"}, "messages": [{"body_text": "No event id"}]},
+        "ticket": {
+            "id": 5004,
+            "customer": {"email": "a@b.com"},
+            "messages": [{"body_text": "No event id"}],
+        },
     }
 
     r = c.post("/support/webhooks/gorgias/ticket-created", headers=headers, json=payload)

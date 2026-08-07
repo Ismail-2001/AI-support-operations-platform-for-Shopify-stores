@@ -8,7 +8,6 @@ thousand chunks, or once you're serving many clients from one process.
 """
 
 import json
-from typing import List, Optional
 
 import aiosqlite
 import numpy as np
@@ -32,12 +31,12 @@ CREATE TABLE IF NOT EXISTS kb_chunks (
 """
 
 
-def _chunk_text(text: str, max_chars: int = 800) -> List[str]:
+def _chunk_text(text: str, max_chars: int = 800) -> list[str]:
     """Simple paragraph-aware chunking — good enough for FAQ/policy pages. Paragraphs that
     are themselves longer than max_chars (e.g. one long product description with no blank
     lines) get hard-split on sentence boundaries so no single chunk ever exceeds the limit."""
     paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    chunks: List[str] = []
+    chunks: list[str] = []
     current = ""
     for p in paragraphs:
         if len(p) > max_chars:
@@ -57,19 +56,22 @@ def _chunk_text(text: str, max_chars: int = 800) -> List[str]:
     return chunks or [text[:max_chars]]
 
 
-def _split_long_paragraph(paragraph: str, max_chars: int) -> List[str]:
+def _split_long_paragraph(paragraph: str, max_chars: int) -> list[str]:
     """Splits an oversized paragraph on sentence boundaries, falling back to a hard
     character cut only if a single 'sentence' is itself longer than max_chars."""
-    sentences = [s.strip() for s in paragraph.replace("! ", "!|").replace("? ", "?|")
-                 .replace(". ", ".|").split("|") if s.strip()]
-    chunks: List[str] = []
+    sentences = [
+        s.strip()
+        for s in paragraph.replace("! ", "!|").replace("? ", "?|").replace(". ", ".|").split("|")
+        if s.strip()
+    ]
+    chunks: list[str] = []
     current = ""
     for s in sentences:
         if len(s) > max_chars:
             if current:
                 chunks.append(current)
                 current = ""
-            chunks.extend(s[i:i + max_chars] for i in range(0, len(s), max_chars))
+            chunks.extend(s[i : i + max_chars] for i in range(0, len(s), max_chars))
             continue
         if len(current) + len(s) + 1 <= max_chars:
             current = f"{current} {s}".strip()
@@ -83,7 +85,7 @@ def _split_long_paragraph(paragraph: str, max_chars: int) -> List[str]:
 
 
 class KnowledgeBase:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
 
     async def init(self):
@@ -112,7 +114,9 @@ class KnowledgeBase:
             await db.execute("DELETE FROM kb_chunks WHERE source = ?", (source,))
             await db.commit()
 
-    async def search(self, query: str, top_k: int = 3, min_score: float = 0.55) -> List[KnowledgeChunk]:
+    async def search(
+        self, query: str, top_k: int = 3, min_score: float = 0.55
+    ) -> list[KnowledgeChunk]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM kb_chunks")
@@ -138,7 +142,13 @@ class KnowledgeBase:
 
         scored.sort(key=lambda x: x[0], reverse=True)
         return [
-            KnowledgeChunk(id=row["id"], source=row["source"], title=row["title"], content=row["content"], score=score)
+            KnowledgeChunk(
+                id=row["id"],
+                source=row["source"],
+                title=row["title"],
+                content=row["content"],
+                score=score,
+            )
             for score, row in scored[:top_k]
         ]
 

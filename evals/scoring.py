@@ -7,22 +7,22 @@ split is the answer.
 """
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
 class CaseResult:
     case_id: str
     passed: bool
-    failures: List[str] = field(default_factory=list)
-    category_correct: Optional[bool] = None
-    confidence: Optional[float] = None
+    failures: list[str] = field(default_factory=list)
+    category_correct: bool | None = None
+    confidence: float | None = None
 
 
-def score_case(case: Dict[str, Any], classification: Any, suggestion: Any) -> CaseResult:
+def score_case(case: dict[str, Any], classification: Any, suggestion: Any) -> CaseResult:
     """classification: ClassificationResult, suggestion: ResponseSuggestion (or any object/
     dict with matching attributes — kept duck-typed so tests can pass plain fakes)."""
-    failures: List[str] = []
+    failures: list[str] = []
     category_correct = None
 
     def _val(obj, name):
@@ -47,7 +47,9 @@ def score_case(case: Dict[str, Any], classification: Any, suggestion: Any) -> Ca
     actual_sentiment = _val(classification, "sentiment")
     expected_sentiment = case.get("expected_sentiment")
     if expected_sentiment is not None:
-        allowed = expected_sentiment if isinstance(expected_sentiment, list) else [expected_sentiment]
+        allowed = (
+            expected_sentiment if isinstance(expected_sentiment, list) else [expected_sentiment]
+        )
         if actual_sentiment not in allowed:
             failures.append(f"sentiment: expected one of {allowed}, got '{actual_sentiment}'")
 
@@ -55,9 +57,13 @@ def score_case(case: Dict[str, Any], classification: Any, suggestion: Any) -> Ca
         expected_num = case["expected_extracted_order_number"]
         actual_num = getattr(classification, "extracted_order_number", None)
         if expected_num is not None and actual_num != expected_num:
-            failures.append(f"extracted_order_number: expected '{expected_num}', got '{actual_num}'")
+            failures.append(
+                f"extracted_order_number: expected '{expected_num}', got '{actual_num}'"
+            )
         if expected_num is None and actual_num is not None:
-            failures.append(f"extracted_order_number: expected None, got '{actual_num}' (hallucinated an order number)")
+            failures.append(
+                f"extracted_order_number: expected None, got '{actual_num}' (hallucinated an order number)"
+            )
 
     confidence = getattr(suggestion, "confidence", None)
     max_conf = case.get("max_confidence_expected")
@@ -81,12 +87,15 @@ def score_case(case: Dict[str, Any], classification: Any, suggestion: Any) -> Ca
         failures.append(f"response must contain one of {required_one_of}, found none")
 
     return CaseResult(
-        case_id=case["id"], passed=(len(failures) == 0), failures=failures,
-        category_correct=category_correct, confidence=confidence,
+        case_id=case["id"],
+        passed=(len(failures) == 0),
+        failures=failures,
+        category_correct=category_correct,
+        confidence=confidence,
     )
 
 
-def summarize(results: List[CaseResult]) -> Dict[str, Any]:
+def summarize(results: list[CaseResult]) -> dict[str, Any]:
     total = len(results)
     passed = sum(1 for r in results if r.passed)
     category_judged = [r for r in results if r.category_correct is not None]
@@ -96,6 +105,8 @@ def summarize(results: List[CaseResult]) -> Dict[str, Any]:
         "total_cases": total,
         "passed": passed,
         "pass_rate": round(passed / total, 3) if total else None,
-        "category_accuracy": round(category_correct / len(category_judged), 3) if category_judged else None,
+        "category_accuracy": round(category_correct / len(category_judged), 3)
+        if category_judged
+        else None,
         "failed_case_ids": [r.case_id for r in results if not r.passed],
     }

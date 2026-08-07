@@ -8,14 +8,13 @@ this to Redis (INCR + EXPIRE) so limits are shared across instances instead of p
 
 import time
 from collections import defaultdict, deque
-from typing import Deque, Dict
 
 from fastapi import HTTPException, Request
 
 from agent.config import settings
 
 # ip -> deque of request timestamps within the current window
-_request_log: Dict[str, Deque[float]] = defaultdict(deque)
+_request_log: dict[str, deque[float]] = defaultdict(deque)
 
 
 def _check_rate_limit(client_ip: str, limit_per_minute: int) -> None:
@@ -35,12 +34,24 @@ def _check_rate_limit(client_ip: str, limit_per_minute: int) -> None:
 
 
 def _client_ip(request: Request) -> str:
-    # Respect a reverse proxy's forwarded header (Render sits behind one) if present,
-    # otherwise fall back to the direct connection IP.
+    """Extract client IP for rate limiting.
+    x-forwarded-for is spoofable — only trust it in production behind a known proxy.
+    In development, always use the direct connection IP."""
+    if settings.ENV == "development":
+        # Development: never trust x-forwarded-for (easily spoofed)
+        return request.client.host if request.client else "unknown"
+
+    # Production: behind Render's load balancer, x-forwarded-for is set by the proxy.
+    # We still prefer the direct IP when available, but fall back to x-forwarded-for
+    # for requests that come through the proxy chain.
+    if request.client:
+        return request.client.host
+
     forwarded = request.headers.get("x-forwarded-for")
     if forwarded:
         return forwarded.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+
+    return "unknown"
 
 
 async def rate_limit_default(request: Request) -> None:

@@ -8,21 +8,36 @@ see agent/observability.py for the shared instrumentation helper both this and
 response_engine.py use.
 """
 
-import time
 import re
-from typing import List, Optional
+import time
 
 import structlog
 
 from agent.config import settings
 from agent.conversation import format_transcript
 from agent.llm import get_fallback_llm, get_llm, invoke_with_fallback
-from agent.models import ClassificationResult, Sentiment, SupportTicket, TicketCategory, TicketMessage, TicketPriority
+from agent.models import (
+    ClassificationResult,
+    Sentiment,
+    SupportTicket,
+    TicketCategory,
+    TicketMessage,
+    TicketPriority,
+)
 from agent.observability import record_llm_call
 
 logger = structlog.get_logger(__name__)
 
 PROMPT_VERSION = "classifier_v1"
+
+
+def _redact_pii(text: str) -> str:
+    """Mask emails and phone numbers before sending to the LLM.
+    The LLM doesn't need real PII to classify tickets — it only needs the structure."""
+    text = re.sub(r"[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}", "[EMAIL REDACTED]", text)
+    text = re.sub(r"(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}", "[PHONE REDACTED]", text)
+    return text
+
 
 SYSTEM_PROMPT = """You are a senior ecommerce customer support triage specialist.
 You will be shown the full conversation thread for this ticket, oldest message first.
@@ -66,19 +81,29 @@ extract just the number/code into extracted_order_number. Otherwise leave it nul
 class TicketClassifier:
     def __init__(self):
         self.model_name = (
-            settings.GROQ_MODEL if settings.GROQ_API_KEY
-            else settings.GEMINI_MODEL if settings.GOOGLE_API_KEY
+            settings.GROQ_MODEL
+            if settings.GROQ_API_KEY
+            else settings.GEMINI_MODEL
+            if settings.GOOGLE_API_KEY
             else settings.OPENROUTER_MODEL
         )
         self.fallback_model_name = settings.FALLBACK_MODEL
-        self.llm = get_llm(temperature=0.0).with_structured_output(ClassificationResult, include_raw=True)
+        self.llm = get_llm(temperature=0.0).with_structured_output(
+            ClassificationResult, include_raw=True
+        )
         fallback_raw = get_fallback_llm(temperature=0.0)
-        self.fallback_llm = fallback_raw.with_structured_output(ClassificationResult, include_raw=True) if fallback_raw else None
+        self.fallback_llm = (
+            fallback_raw.with_structured_output(ClassificationResult, include_raw=True)
+            if fallback_raw
+            else None
+        )
 
     async def classify(
-        self, ticket: SupportTicket, history: Optional[List[TicketMessage]] = None
+        self, ticket: SupportTicket, history: list[TicketMessage] | None = None
     ) -> ClassificationResult:
         transcript = format_transcript(history) if history else f"Customer: {ticket.body}"
+        redacted_transcript = _redact_pii(transcript)
+        redacted_email = _redact_pii(ticket.customer_email)
 
         messages = [
             ("system", SYSTEM_PROMPT),
@@ -86,14 +111,16 @@ class TicketClassifier:
                 "human",
                 f"Subject: {ticket.subject}\n"
                 f"Channel: {ticket.channel.value}\n"
-                f"Customer: {ticket.customer_email}\n\n"
-                f"Conversation so far:\n{transcript}",
+                f"Customer: {redacted_email}\n\n"
+                f"Conversation so far:\n{redacted_transcript}",
             ),
         ]
 
         start = time.monotonic()
         raw_result, actual_model = await invoke_with_fallback(
-            self.llm, self.fallback_llm, messages,
+            self.llm,
+            self.fallback_llm,
+            messages,
             primary_model_name=self.model_name,
             fallback_model_name=self.fallback_model_name,
         )
@@ -111,15 +138,22 @@ class TicketClassifier:
         if parsed.extracted_order_number:
             sanitized = re.sub(r"[^A-Za-z0-9#\-]", "", parsed.extracted_order_number)[:40]
             if sanitized != parsed.extracted_order_number:
-                logger.warning("llm_output_sanitized", field="extracted_order_number",
-                               before=parsed.extracted_order_number, after=sanitized)
+                logger.warning(
+                    "llm_output_sanitized",
+                    field="extracted_order_number",
+                    before=parsed.extracted_order_number,
+                    after=sanitized,
+                )
                 parsed.extracted_order_number = sanitized
         result = parsed
 
         await record_llm_call(
-            ticket_id=ticket.id, stage="classification", model=actual_model,
-            raw_message=raw_result.get("raw"), latency_ms=latency_ms,
-            input_summary={"transcript": transcript, "subject": ticket.subject},
+            ticket_id=ticket.id,
+            stage="classification",
+            model=actual_model,
+            raw_message=raw_result.get("raw"),
+            latency_ms=latency_ms,
+            input_summary={"transcript": redacted_transcript, "subject": ticket.subject},
             output_summary=result.model_dump(mode="json"),
             prompt_version=PROMPT_VERSION,
         )

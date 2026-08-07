@@ -29,10 +29,17 @@ async def verify_api_key(x_api_key: str = Header(default="")) -> None:
 
 
 def check_shared_secret(provided: str | None, expected: str | None, name: str) -> None:
-    """Used by webhook endpoints (Gorgias, generic inbound) instead of verify_api_key."""
+    """Used by webhook endpoints (Gorgias, generic inbound) instead of verify_api_key.
+    In production (ENV != 'development'), a missing secret is a configuration error
+    that should fail loudly — an open webhook endpoint is a security vulnerability."""
     if not expected:
-        # No secret configured — allowed for local dev/testing, but this should always be
-        # set before pointing a real webhook at a deployed instance.
-        return
+        if settings.ENV == "development":
+            # Dev/testing: no secret configured is allowed for local convenience.
+            return
+        # Production: missing secret is a hard failure — never silently bypass.
+        raise HTTPException(
+            status_code=500,
+            detail=f"{name} webhook secret not configured — refusing to accept unauthenticated webhooks.",
+        )
     if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail=f"Invalid or missing {name} secret")

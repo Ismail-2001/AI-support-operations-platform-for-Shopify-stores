@@ -19,17 +19,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 os.environ.setdefault("TENANT_NAME", "test")
 
 from agent.config import settings
+from agent.knowledge_base import KnowledgeBase
 from agent.models import (
     ClassificationResult,
     ResponseSuggestion,
     Sentiment,
-    SuggestedAction,
-    ActionType,
     TicketCategory,
     TicketPriority,
 )
 from agent.storage import TicketStore
-from agent.knowledge_base import KnowledgeBase
 
 
 @pytest.fixture
@@ -71,8 +69,13 @@ def reset_settings():
 class FakeClassifier:
     """Returns a fixed classification regardless of input, unless overridden per-test."""
 
-    def __init__(self, category=TicketCategory.ORDER_STATUS, priority=TicketPriority.NORMAL,
-                 sentiment=Sentiment.NEUTRAL, extracted_order_number=None):
+    def __init__(
+        self,
+        category=TicketCategory.ORDER_STATUS,
+        priority=TicketPriority.NORMAL,
+        sentiment=Sentiment.NEUTRAL,
+        extracted_order_number=None,
+    ):
         self.category = category
         self.priority = priority
         self.sentiment = sentiment
@@ -80,8 +83,11 @@ class FakeClassifier:
 
     async def classify(self, ticket, history=None):
         return ClassificationResult(
-            category=self.category, priority=self.priority, sentiment=self.sentiment,
-            extracted_order_number=self.extracted_order_number, reasoning="test",
+            category=self.category,
+            priority=self.priority,
+            sentiment=self.sentiment,
+            extracted_order_number=self.extracted_order_number,
+            reasoning="test",
         )
 
 
@@ -91,11 +97,15 @@ class FakeResponseEngine:
         self.requires_human_review = requires_human_review
         self.suggested_action = suggested_action
 
-    async def generate_suggestion(self, ticket, classification, order_context=None,
-                                   knowledge_context=None, history=None):
+    async def generate_suggestion(
+        self, ticket, classification, order_context=None, knowledge_context=None, history=None
+    ):
         return ResponseSuggestion(
-            ticket_id=ticket.id, suggested_response="Test response", confidence=self.confidence,
-            reasoning="test", requires_human_review=self.requires_human_review,
+            ticket_id=ticket.id,
+            suggested_response="Test response",
+            confidence=self.confidence,
+            reasoning="test",
+            requires_human_review=self.requires_human_review,
             suggested_action=self.suggested_action,
         )
 

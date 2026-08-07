@@ -3,18 +3,18 @@ Customer Support API Routes.
 Endpoints for ticket ingestion (manual + Gorgias webhook), suggestions, responses, analytics.
 """
 
-from datetime import datetime
-from typing import Any, Dict, Optional
+import uuid
+from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, validator
 
 from agent.auth import check_shared_secret, verify_api_key
 from agent.config import settings
 from agent.knowledge_base import knowledge_base
 from agent.models import (
-    ActionType,
     MessageSender,
     SupportAnalytics,
     SupportTicket,
@@ -30,13 +30,16 @@ logger = structlog.get_logger(__name__)
 
 # Protected: everything a dashboard/admin/agency operator calls. Requires X-API-Key + rate limited.
 router = APIRouter(
-    prefix="/support", tags=["customer-support"],
+    prefix="/support",
+    tags=["customer-support"],
     dependencies=[Depends(verify_api_key), Depends(rate_limit_default)],
 )
 
 # Public but secret-gated: what Gorgias/Twilio/a chat widget calls. No X-API-Key (those
 # services can't easily send one) — each endpoint checks its own shared secret instead.
-webhook_router = APIRouter(prefix="/support", tags=["webhooks"], dependencies=[Depends(rate_limit_default)])
+webhook_router = APIRouter(
+    prefix="/support", tags=["webhooks"], dependencies=[Depends(rate_limit_default)]
+)
 
 # Fully public: uptime monitors need this to work with no credentials at all.
 public_router = APIRouter(prefix="/support", tags=["public"])
@@ -46,22 +49,48 @@ _gorgias = GorgiasClient()
 
 
 class TicketCreateRequest(BaseModel):
-    shop_domain: Optional[str] = None
+    shop_domain: str | None = None
     customer_email: str
-    customer_name: Optional[str] = None
+    customer_name: str | None = None
     subject: str
     body: str
     channel: TicketChannel = TicketChannel.EMAIL
-    order_id: Optional[str] = None
-    order_number: Optional[str] = None
-    product_id: Optional[str] = None
-    metadata: Optional[Dict[str, Any]] = None
+    order_id: str | None = None
+    order_number: str | None = None
+    product_id: str | None = None
+    metadata: dict[str, Any] | None = None
+
+    @validator("customer_email")
+    def validate_email(cls, v):
+        if len(v) > 254:
+            raise ValueError("customer_email too long (max 254 chars)")
+        if "@" not in v:
+            raise ValueError("invalid email format")
+        return v.strip()
+
+    @validator("body")
+    def validate_body(cls, v):
+        if len(v) > 4000:
+            raise ValueError("message body too long (max 4000 chars)")
+        return v.strip()
+
+    @validator("subject")
+    def validate_subject(cls, v):
+        if len(v) > 200:
+            raise ValueError("subject too long (max 200 chars)")
+        return v.strip()
+
+    @validator("customer_name")
+    def validate_customer_name(cls, v):
+        if v and len(v) > 100:
+            raise ValueError("customer_name too long (max 100 chars)")
+        return v.strip() if v else v
 
 
 class TicketUpdateRequest(BaseModel):
-    status: Optional[str] = None
-    priority: Optional[str] = None
-    resolution_notes: Optional[str] = None
+    status: str | None = None
+    priority: str | None = None
+    resolution_notes: str | None = None
 
 
 class ResponseRequest(BaseModel):
@@ -89,7 +118,7 @@ async def whoami():
 @router.post("/tickets")
 async def create_ticket(req: TicketCreateRequest):
     """Create a ticket and run it through the full agent pipeline synchronously."""
-    ticket_id = f"ticket_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+    ticket_id = f"ticket_{uuid.uuid4().hex[:12]}"
     ticket = SupportTicket(
         id=ticket_id,
         shop_domain=req.shop_domain or settings.SHOPIFY_SHOP_DOMAIN,
@@ -118,13 +147,15 @@ async def create_ticket(req: TicketCreateRequest):
 
 @router.get("/tickets")
 async def list_tickets(
-    status: Optional[str] = None,
-    priority: Optional[str] = None,
-    category: Optional[str] = None,
+    status: str | None = None,
+    priority: str | None = None,
+    category: str | None = None,
     page: int = Query(1, ge=1),
     limit: int = Query(20, ge=1, le=100),
 ):
-    rows = await store.list(status=status, category=category, priority=priority, page=page, limit=limit)
+    rows = await store.list(
+        status=status, category=category, priority=priority, page=page, limit=limit
+    )
     return {
         "tickets": [r["ticket"] for r in rows],
         "total": len(rows),
@@ -153,6 +184,12 @@ async def update_ticket(ticket_id: str, req: TicketUpdateRequest):
 
 class FollowUpMessageRequest(BaseModel):
     body: str
+
+    @validator("body")
+    def validate_body(cls, v):
+        if len(v) > 4000:
+            raise ValueError("message body too long (max 4000 chars)")
+        return v.strip()
 
 
 @router.post("/tickets/{ticket_id}/messages")
@@ -226,7 +263,11 @@ async def respond_to_ticket(ticket_id: str, req: ResponseRequest):
 
     await store.add_message(ticket_id, MessageSender.AGENT.value, req.response)
     await store.update_status(ticket_id, status="resolved")
-    return {"ticket_id": ticket_id, "status": "response_sent", "sent_at": datetime.utcnow().isoformat()}
+    return {
+        "ticket_id": ticket_id,
+        "status": "response_sent",
+        "sent_at": datetime.now(UTC).isoformat(),
+    }
 
 
 # ── Actions (human-approved, money/fulfillment-moving) ──────
@@ -259,16 +300,24 @@ async def approve_refund(
     order object includes a `refunds` array you can sum)."""
     existing = await store.get_refund_audit(idempotency_key)
     if existing:
-        logger.info("refund_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id)
-        return {"ticket_id": existing["ticket_id"], "order_id": existing["order_id"],
-                "refund": existing["shopify_response"], "replayed": True}
+        logger.info(
+            "refund_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
+        )
+        return {
+            "ticket_id": existing["ticket_id"],
+            "order_id": existing["order_id"],
+            "refund": existing["shopify_response"],
+            "replayed": True,
+        }
 
     row = await store.get(ticket_id)
     if not row:
         raise HTTPException(status_code=404, detail="Ticket not found")
     order_id = row["ticket"].get("order_id")
     if not order_id:
-        raise HTTPException(status_code=400, detail="Ticket has no linked order_id — look up the order first")
+        raise HTTPException(
+            status_code=400, detail="Ticket has no linked order_id — look up the order first"
+        )
 
     if req.amount <= 0:
         raise HTTPException(status_code=400, detail="Refund amount must be positive")
@@ -290,25 +339,42 @@ async def approve_refund(
 
     try:
         result = await _agent.shopify.create_refund(
-            order_id=order_id, amount=req.amount, reason=req.reason, notify_customer=req.notify_customer
+            order_id=order_id,
+            amount=req.amount,
+            reason=req.reason,
+            notify_customer=req.notify_customer,
         )
     except Exception as e:
         logger.error("refund_failed", ticket_id=ticket_id, order_id=order_id, error=str(e))
         await store.record_refund_audit(
-            idempotency_key, ticket_id, order_id, req.amount, req.reason, status="failed", error=str(e)
+            idempotency_key,
+            ticket_id,
+            order_id,
+            req.amount,
+            req.reason,
+            status="failed",
+            error=str(e),
         )
         raise HTTPException(status_code=502, detail=f"Refund failed: {e}")
 
     await store.record_refund_audit(
-        idempotency_key, ticket_id, order_id, req.amount, req.reason,
-        status="succeeded", shopify_response=result,
+        idempotency_key,
+        ticket_id,
+        order_id,
+        req.amount,
+        req.reason,
+        status="succeeded",
+        shopify_response=result,
     )
     await store.add_message(
-        ticket_id, MessageSender.AGENT.value,
+        ticket_id,
+        MessageSender.AGENT.value,
         f"[Action taken] Refund of {req.amount} approved and processed. Reason: {req.reason}",
     )
     await store.update_status(ticket_id, status="resolved")
-    logger.info("refund_approved_and_processed", ticket_id=ticket_id, order_id=order_id, amount=req.amount)
+    logger.info(
+        "refund_approved_and_processed", ticket_id=ticket_id, order_id=order_id, amount=req.amount
+    )
     return {"ticket_id": ticket_id, "order_id": order_id, "refund": result, "replayed": False}
 
 
@@ -332,16 +398,24 @@ async def approve_resend_order(
     returns the FIRST call's result instead of creating a duplicate order."""
     existing = await store.get_resend_audit(idempotency_key)
     if existing:
-        logger.info("resend_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id)
-        return {"ticket_id": existing["ticket_id"], "order_id": existing["order_id"],
-                "resend": existing["shopify_response"], "replayed": True}
+        logger.info(
+            "resend_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
+        )
+        return {
+            "ticket_id": existing["ticket_id"],
+            "order_id": existing["order_id"],
+            "resend": existing["shopify_response"],
+            "replayed": True,
+        }
 
     row = await store.get(ticket_id)
     if not row:
         raise HTTPException(status_code=404, detail="Ticket not found")
     order_id = row["ticket"].get("order_id")
     if not order_id:
-        raise HTTPException(status_code=400, detail="Ticket has no linked order_id — look up the order first")
+        raise HTTPException(
+            status_code=400, detail="Ticket has no linked order_id — look up the order first"
+        )
 
     try:
         order = await _agent.shopify.get_order_by_id(order_id)
@@ -352,7 +426,9 @@ async def approve_resend_order(
         raise HTTPException(status_code=404, detail=f"Order {order_id} not found in Shopify")
 
     try:
-        result = await _agent.shopify.create_reorder(order_id=order_id, notify_customer=req.notify_customer)
+        result = await _agent.shopify.create_reorder(
+            order_id=order_id, notify_customer=req.notify_customer
+        )
     except Exception as e:
         logger.error("resend_failed", ticket_id=ticket_id, order_id=order_id, error=str(e))
         await store.record_resend_audit(
@@ -361,11 +437,15 @@ async def approve_resend_order(
         raise HTTPException(status_code=502, detail=f"Resend failed: {e}")
 
     await store.record_resend_audit(
-        idempotency_key, ticket_id, order_id,
-        status="succeeded", shopify_response=result,
+        idempotency_key,
+        ticket_id,
+        order_id,
+        status="succeeded",
+        shopify_response=result,
     )
     await store.add_message(
-        ticket_id, MessageSender.AGENT.value,
+        ticket_id,
+        MessageSender.AGENT.value,
         f"[Action taken] Replacement order created. Reason: {req.reason}",
     )
     await store.update_status(ticket_id, status="resolved")
@@ -412,7 +492,9 @@ async def sync_knowledge_from_shopify():
             source = f"product:{p.get('handle', p.get('id'))}"
             content = f"{p.get('title', '')}\n\n{p.get('body_html', '')}"
             await knowledge_base.delete_source(source)
-            total_chunks += await knowledge_base.ingest(source, p.get("title", "Untitled product"), content)
+            total_chunks += await knowledge_base.ingest(
+                source, p.get("title", "Untitled product"), content
+            )
     except ShopifyNotConfigured:
         raise HTTPException(status_code=400, detail="Shopify is not configured")
 
@@ -443,15 +525,31 @@ async def test_knowledge_search(req: KBSearchRequest):
 class InboundMessageRequest(BaseModel):
     channel: TicketChannel
     customer_email: str
-    customer_name: Optional[str] = None
-    subject: Optional[str] = "Chat conversation"
+    customer_name: str | None = None
+    subject: str | None = "Chat conversation"
     body: str
-    thread_id: Optional[str] = None  # pass the same thread_id on follow-ups from the same customer/session
+    thread_id: str | None = (
+        None  # pass the same thread_id on follow-ups from the same customer/session
+    )
+
+    @validator("customer_email")
+    def validate_email(cls, v):
+        if len(v) > 254:
+            raise ValueError("customer_email too long (max 254 chars)")
+        if "@" not in v:
+            raise ValueError("invalid email format")
+        return v.strip()
+
+    @validator("body")
+    def validate_body(cls, v):
+        if len(v) > 4000:
+            raise ValueError("message body too long (max 4000 chars)")
+        return v.strip()
 
 
 @webhook_router.post("/webhooks/inbound")
 async def generic_inbound_message(
-    req: InboundMessageRequest, x_webhook_secret: Optional[str] = Header(None)
+    req: InboundMessageRequest, x_webhook_secret: str | None = Header(None)
 ):
     """One endpoint for any channel that isn't Gorgias — a website chat widget, a WhatsApp
     number via Twilio/Meta Cloud API, an Instagram DM bridge, etc. Pass the same `thread_id`
@@ -473,10 +571,16 @@ async def generic_inbound_message(
                 "auto_sent": decision.auto_sent if decision else False,
             }
 
-    ticket_id = f"inbound_{req.thread_id}" if req.thread_id else f"inbound_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}"
+    ticket_id = (
+        f"inbound_{uuid.uuid4().hex[:12]}" if req.thread_id else f"inbound_{uuid.uuid4().hex[:12]}"
+    )
     ticket = SupportTicket(
-        id=ticket_id, customer_email=req.customer_email, customer_name=req.customer_name,
-        subject=req.subject or "Chat conversation", body=req.body, channel=req.channel,
+        id=ticket_id,
+        customer_email=req.customer_email,
+        customer_name=req.customer_name,
+        subject=req.subject or "Chat conversation",
+        body=req.body,
+        channel=req.channel,
     )
     decision = await _agent.handle_ticket(ticket)
     return {
@@ -489,7 +593,7 @@ async def generic_inbound_message(
 # ── Gorgias Inbound Webhook ─────────────────────────────────
 
 
-def _extract_event_id(payload: Dict[str, Any]) -> Optional[str]:
+def _extract_event_id(payload: dict[str, Any]) -> str | None:
     """Extract a unique event id from a Gorgias webhook payload.
 
     Gorgias places it at the top-level ``id`` for some event types and at
@@ -502,7 +606,9 @@ def _extract_event_id(payload: Dict[str, Any]) -> Optional[str]:
 
 
 @webhook_router.post("/webhooks/gorgias/ticket-created")
-async def gorgias_ticket_created_webhook(request: Request, x_webhook_secret: Optional[str] = Header(None)):
+async def gorgias_ticket_created_webhook(
+    request: Request, x_webhook_secret: str | None = Header(None)
+):
     """Point Gorgias's 'ticket-created' event webhook at this endpoint.
     Set GORGIAS_WEBHOOK_SECRET and configure the same value as a custom header in Gorgias's
     webhook settings — Gorgias doesn't sign payloads, so a shared secret is the guard here."""
@@ -519,7 +625,7 @@ async def gorgias_ticket_created_webhook(request: Request, x_webhook_secret: Opt
     ticket = GorgiasClient.normalize_webhook_payload(payload)
 
     decision = await _agent.handle_ticket(ticket)
-    await _dispatch_gorgias_reply(ticket.gorgias_ticket_id, decision)
+    await _dispatch_gorgias_reply(ticket.gorgias_ticket_id, decision, ticket.id)
 
     if event_id:
         await store.record_processed_webhook_event(event_id, "gorgias")
@@ -528,7 +634,9 @@ async def gorgias_ticket_created_webhook(request: Request, x_webhook_secret: Opt
 
 
 @webhook_router.post("/webhooks/gorgias/message-created")
-async def gorgias_message_created_webhook(request: Request, x_webhook_secret: Optional[str] = Header(None)):
+async def gorgias_message_created_webhook(
+    request: Request, x_webhook_secret: str | None = Header(None)
+):
     """Point Gorgias's 'message-created' event webhook at this endpoint (separate webhook in
     Gorgias's settings from ticket-created). Handles follow-up customer messages on tickets we've
     already seen — appends to the same thread instead of creating a duplicate ticket."""
@@ -559,17 +667,24 @@ async def gorgias_message_created_webhook(request: Request, x_webhook_secret: Op
         return {"received": True, "skipped": "no matching ticket on file for this Gorgias ticket"}
 
     decision = await _agent.handle_followup(ticket.id, message_body)
-    await _dispatch_gorgias_reply(gorgias_ticket_id, decision)
+    await _dispatch_gorgias_reply(gorgias_ticket_id, decision, ticket.id)
 
     if event_id:
         await store.record_processed_webhook_event(event_id, "gorgias")
 
-    return {"received": True, "ticket_id": ticket.id, "auto_sent": decision.auto_sent if decision else False}
+    return {
+        "received": True,
+        "ticket_id": ticket.id,
+        "auto_sent": decision.auto_sent if decision else False,
+    }
 
 
-async def _dispatch_gorgias_reply(gorgias_ticket_id: Optional[str], decision) -> None:
+async def _dispatch_gorgias_reply(gorgias_ticket_id: str | None, decision, ticket_id: str) -> None:
     """High-confidence + policy-clear -> send straight back to the customer via Gorgias.
-    Everything else -> attach as an internal note so a human sees the draft in Gorgias itself."""
+    Everything else -> attach as an internal note so a human sees the draft in Gorgias itself.
+
+    On failure: logs the error and does NOT silently swallow — the caller must know the
+    reply was not delivered so the ticket status reflects reality."""
     if not (decision and _gorgias.enabled and gorgias_ticket_id):
         return
     try:
@@ -581,8 +696,19 @@ async def _dispatch_gorgias_reply(gorgias_ticket_id: Optional[str], decision) ->
                 f"review required):\n\n{decision.suggestion.suggested_response}"
             )
             await _gorgias.add_internal_note(gorgias_ticket_id, note)
+    except GorgiasNotConfigured:
+        logger.warning("gorgias_not_configured", ticket_id=ticket_id)
     except Exception as e:
-        logger.error("gorgias_reply_failed", gorgias_ticket_id=gorgias_ticket_id, error=str(e))
+        logger.error(
+            "gorgias_reply_failed",
+            ticket_id=ticket_id,
+            gorgias_ticket_id=gorgias_ticket_id,
+            error=str(e),
+        )
+        if decision.auto_sent:
+            # The reply was supposed to go to the customer but Gorgias failed.
+            # Flip auto_sent to False so the ticket doesn't falsely claim delivery.
+            await store.update_status(ticket_id, auto_sent=False)
 
 
 # ── Analytics ──────────────────────────────────────────────
@@ -656,5 +782,5 @@ async def customer_support_health():
         "shopify_connected": _agent.shopify.enabled,
         "gorgias_connected": _gorgias.enabled,
         "auto_send_enabled": settings.AUTO_SEND_ENABLED,
-        "timestamp": datetime.utcnow().isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
     }

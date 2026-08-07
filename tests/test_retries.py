@@ -2,13 +2,13 @@
 Predicates are tested directly; invoke_with_fallback is exercised with
 mocked chains to verify retry-vs-fallthrough behaviour."""
 
-import httpx
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from agent.llm import invoke_with_fallback, _is_transient_llm_error
-from integrations.shopify import _is_transient_shopify_error, _is_timeout_or_connection_error
+import httpx
+import pytest
 
+from agent.llm import _is_transient_llm_error, invoke_with_fallback
+from integrations.shopify import _is_timeout_or_connection_error, _is_transient_shopify_error
 
 # ── Predicate unit tests ────────────────────────────────────
 
@@ -92,15 +92,19 @@ class TestShopifyRefundPredicate:
 async def test_retry_transient_timeout_eventually_succeeds():
     """Fails twice with timeout then succeeds -> 3 attempts, returns primary result."""
     primary = AsyncMock()
-    primary.ainvoke = AsyncMock(side_effect=[
-        httpx.TimeoutException("timeout 1"),
-        httpx.TimeoutException("timeout 2"),
-        {"parsed": "ok", "raw": None},
-    ])
+    primary.ainvoke = AsyncMock(
+        side_effect=[
+            httpx.TimeoutException("timeout 1"),
+            httpx.TimeoutException("timeout 2"),
+            {"parsed": "ok", "raw": None},
+        ]
+    )
     fallback = AsyncMock()
 
     result, model = await invoke_with_fallback(
-        primary, fallback, ["msg"],
+        primary,
+        fallback,
+        ["msg"],
         primary_model_name="gemini-2.0-flash",
         fallback_model_name="claude-haiku",
     )
@@ -118,7 +122,9 @@ async def test_retry_client_400_error_does_not_retry():
 
     with pytest.raises(httpx.HTTPStatusError):
         await invoke_with_fallback(
-            primary, None, ["msg"],
+            primary,
+            None,
+            ["msg"],
             primary_model_name="gemini-2.0-flash",
             fallback_model_name="claude-haiku",
         )
@@ -135,7 +141,9 @@ async def test_retry_all_attempts_exhausted_raises_original():
 
     with pytest.raises(httpx.TimeoutException, match="upstream down"):
         await invoke_with_fallback(
-            primary, fallback, ["msg"],
+            primary,
+            fallback,
+            ["msg"],
             primary_model_name="gemini-2.0-flash",
             fallback_model_name="claude-haiku",
         )

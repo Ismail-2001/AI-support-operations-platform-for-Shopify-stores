@@ -5,7 +5,6 @@ off, even when everything else about a ticket would qualify for auto-send."""
 import pytest
 
 from agent.config import settings
-from agent.models import ResponseSuggestion, SuggestedAction, ActionType
 from agent.observability import _compute_cost, _extract_usage, check_daily_cost_cap, record_llm_call
 
 pytestmark = pytest.mark.asyncio
@@ -30,6 +29,7 @@ def test_extract_usage_handles_none_message():
 def test_extract_usage_handles_missing_usage_metadata():
     class NoUsage:
         pass
+
     assert _extract_usage(NoUsage()) == (0, 0)
 
 
@@ -45,16 +45,20 @@ def test_compute_cost_falls_back_to_default_pricing_for_unknown_model():
 
 
 async def test_record_llm_call_persists_trace_and_cost(test_store):
-    import agent.observability as obs_module
     obs_module_store_backup = None
     import agent.storage as storage_module
+
     storage_module.store = test_store
 
     msg = _FakeUsageMessage(200, 100)
     cost = await record_llm_call(
-        ticket_id="t1", stage="classification", model="gemini-2.0-flash",
-        raw_message=msg, latency_ms=123.4,
-        input_summary={"transcript": "hello"}, output_summary={"category": "shipping"},
+        ticket_id="t1",
+        stage="classification",
+        model="gemini-2.0-flash",
+        raw_message=msg,
+        latency_ms=123.4,
+        input_summary={"transcript": "hello"},
+        output_summary={"category": "shipping"},
     )
     assert cost > 0
 
@@ -71,12 +75,17 @@ async def test_record_llm_call_persists_trace_and_cost(test_store):
 
 async def test_record_llm_call_with_zero_tokens_does_not_pollute_cost_table(test_store):
     import agent.storage as storage_module
+
     storage_module.store = test_store
 
     await record_llm_call(
-        ticket_id="t2", stage="classification", model="gemini-2.0-flash",
-        raw_message=None, latency_ms=10.0,
-        input_summary={}, output_summary={},
+        ticket_id="t2",
+        stage="classification",
+        model="gemini-2.0-flash",
+        raw_message=None,
+        latency_ms=10.0,
+        input_summary={},
+        output_summary={},
     )
     # trace should still be recorded (for debugging), but no cost row for a zero-cost call
     traces = await test_store.get_traces("t2")
@@ -87,6 +96,7 @@ async def test_record_llm_call_with_zero_tokens_does_not_pollute_cost_table(test
 
 async def test_daily_cost_cap_disabled_when_set_to_zero(test_store, monkeypatch):
     import agent.storage as storage_module
+
     storage_module.store = test_store
     settings.DAILY_COST_CAP_USD = 0
     assert await check_daily_cost_cap() is True
@@ -94,6 +104,7 @@ async def test_daily_cost_cap_disabled_when_set_to_zero(test_store, monkeypatch)
 
 async def test_daily_cost_cap_allows_when_under_budget(test_store):
     import agent.storage as storage_module
+
     storage_module.store = test_store
     settings.DAILY_COST_CAP_USD = 5.0
     await test_store.record_cost("t1", "classification", "gemini-2.0-flash", 100, 50, cost_usd=0.01)
@@ -102,9 +113,12 @@ async def test_daily_cost_cap_allows_when_under_budget(test_store):
 
 async def test_daily_cost_cap_blocks_when_over_budget(test_store):
     import agent.storage as storage_module
+
     storage_module.store = test_store
     settings.DAILY_COST_CAP_USD = 0.01
-    await test_store.record_cost("t1", "classification", "gemini-2.0-flash", 1_000_000, 1_000_000, cost_usd=0.5)
+    await test_store.record_cost(
+        "t1", "classification", "gemini-2.0-flash", 1_000_000, 1_000_000, cost_usd=0.5
+    )
     assert await check_daily_cost_cap() is False
 
 
@@ -114,8 +128,8 @@ async def test_cost_cap_breach_forces_auto_send_off_end_to_end(test_store):
     auto-send once today's spend has crossed DAILY_COST_CAP_USD."""
     import agent.storage as storage_module
     import agent.support_agent as sa
-    from agent.support_agent import CustomerSupportAgent
     from agent.models import SupportTicket, TicketCategory
+    from agent.support_agent import CustomerSupportAgent
     from tests.conftest import FakeClassifier, FakeResponseEngine, FakeShopify
 
     storage_module.store = test_store
@@ -126,15 +140,23 @@ async def test_cost_cap_breach_forces_auto_send_off_end_to_end(test_store):
     settings.DAILY_COST_CAP_USD = 0.01
 
     # Blow past the cap before this ticket is even processed
-    await test_store.record_cost("prior", "classification", "gemini-2.0-flash", 1_000_000, 1_000_000, cost_usd=1.0)
+    await test_store.record_cost(
+        "prior", "classification", "gemini-2.0-flash", 1_000_000, 1_000_000, cost_usd=1.0
+    )
 
     agent = CustomerSupportAgent.__new__(CustomerSupportAgent)
     agent.classifier = FakeClassifier(category=TicketCategory.SHIPPING)
     agent.response_engine = FakeResponseEngine(confidence=0.95, requires_human_review=False)
     agent.shopify = FakeShopify()
 
-    ticket = SupportTicket(id="capped1", customer_email="a@b.com", subject="Q", body="when will it arrive")
+    ticket = SupportTicket(
+        id="capped1", customer_email="a@b.com", subject="Q", body="when will it arrive"
+    )
     decision = await agent.handle_ticket(ticket)
 
-    assert decision.auto_sent is False, "auto-send must be blocked once the daily cost cap is exceeded"
-    assert decision.suggestion.confidence == 0.95, "the ticket should still be classified/drafted normally"
+    assert (
+        decision.auto_sent is False
+    ), "auto-send must be blocked once the daily cost cap is exceeded"
+    assert (
+        decision.suggestion.confidence == 0.95
+    ), "the ticket should still be classified/drafted normally"

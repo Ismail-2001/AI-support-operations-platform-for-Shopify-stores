@@ -30,9 +30,11 @@ from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from agent.classifier import PROMPT_VERSION as CLASSIFIER_VERSION, TicketClassifier
-from agent.models import SupportTicket, TicketMessage, MessageSender
-from agent.response_engine import PROMPT_VERSION as RESPONSE_VERSION, ResponseGenerationEngine
+from agent.classifier import PROMPT_VERSION as CLASSIFIER_VERSION
+from agent.classifier import TicketClassifier
+from agent.models import MessageSender, SupportTicket, TicketMessage
+from agent.response_engine import PROMPT_VERSION as RESPONSE_VERSION
+from agent.response_engine import ResponseGenerationEngine
 from evals.scoring import score_case, summarize
 
 DATASET_PATH = Path(__file__).parent / "golden_dataset.json"
@@ -45,11 +47,15 @@ def _build_history(messages: list) -> list[TicketMessage]:
     ]
 
 
-async def run_case(case: dict, classifier: TicketClassifier, response_engine: ResponseGenerationEngine) -> dict:
+async def run_case(
+    case: dict, classifier: TicketClassifier, response_engine: ResponseGenerationEngine
+) -> dict:
     history = _build_history(case["history"])
     ticket = SupportTicket(
-        id=f"eval_{case['id']}", customer_email="eval@example.com",
-        subject=case.get("subject", "Eval case"), body=case["history"][-1],
+        id=f"eval_{case['id']}",
+        customer_email="eval@example.com",
+        subject=case.get("subject", "Eval case"),
+        body=case["history"][-1],
     )
 
     classification = await classifier.classify(ticket, history=history)
@@ -60,7 +66,11 @@ async def run_case(case: dict, classifier: TicketClassifier, response_engine: Re
     knowledge_context = None
 
     suggestion = await response_engine.generate_suggestion(
-        ticket, classification, order_context=None, knowledge_context=knowledge_context, history=history
+        ticket,
+        classification,
+        order_context=None,
+        knowledge_context=knowledge_context,
+        history=history,
     )
 
     result = score_case(case, classification, suggestion)
@@ -83,8 +93,9 @@ async def main():
     parser = argparse.ArgumentParser(description="Run the golden-dataset eval suite")
     parser.add_argument("--case", help="Run only this case id")
     parser.add_argument("--json", help="Write full results to this JSON file")
-    parser.add_argument("--delay", type=float, default=4.0,
-                        help="Seconds to sleep between cases (default 4.0)")
+    parser.add_argument(
+        "--delay", type=float, default=4.0, help="Seconds to sleep between cases (default 4.0)"
+    )
     args = parser.parse_args()
 
     dataset = json.loads(DATASET_PATH.read_text())
@@ -98,6 +109,7 @@ async def main():
     response_engine = ResponseGenerationEngine()
 
     from agent.storage import store
+
     await store.init()
 
     print(f"Running {len(dataset)} eval case(s) against {classifier.model_name}...\n")
@@ -109,8 +121,12 @@ async def main():
         try:
             r = await run_case(case, classifier, response_engine)
         except Exception as e:
-            r = {"case_id": case["id"], "passed": False, "failures": [f"EXCEPTION: {e}"],
-                 "description": case.get("description", "")}
+            r = {
+                "case_id": case["id"],
+                "passed": False,
+                "failures": [f"EXCEPTION: {e}"],
+                "description": case.get("description", ""),
+            }
         results.append(r)
         status = "PASS" if r["passed"] else "FAIL"
         print(f"[{status}] {r['case_id']}: {r.get('description', '')}")
@@ -118,14 +134,24 @@ async def main():
             print(f"       - {f}")
 
     from evals.scoring import CaseResult
+
     case_results = [
-        CaseResult(case_id=r["case_id"], passed=r["passed"], failures=r.get("failures", []),
-                   category_correct=r.get("category_correct"), confidence=r.get("confidence"))
+        CaseResult(
+            case_id=r["case_id"],
+            passed=r["passed"],
+            failures=r.get("failures", []),
+            category_correct=r.get("category_correct"),
+            confidence=r.get("confidence"),
+        )
         for r in results
     ]
     summary = summarize(case_results)
     print(f"\n{'=' * 60}")
-    print(f"Pass rate: {summary['passed']}/{summary['total_cases']} ({summary['pass_rate']:.0%})" if summary['pass_rate'] is not None else "No cases run")
+    print(
+        f"Pass rate: {summary['passed']}/{summary['total_cases']} ({summary['pass_rate']:.0%})"
+        if summary["pass_rate"] is not None
+        else "No cases run"
+    )
     if summary["failed_case_ids"]:
         print(f"Failed: {', '.join(summary['failed_case_ids'])}")
 

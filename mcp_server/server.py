@@ -11,20 +11,21 @@ with the existing fastapi/starlette versions.
 import asyncio
 import json
 import sys
-from typing import Any, Dict, List, Optional
+from typing import Any
+
+import structlog
 
 from agent.config import settings
-from integrations.shopify import ShopifyClient, ShopifyNotConfigured
 from agent.knowledge_base import KnowledgeBase
 from agent.storage import TicketStore
-import structlog
+from integrations.shopify import ShopifyClient, ShopifyNotConfigured
 
 logger = structlog.get_logger(__name__)
 
 # Initialize components (lazy initialization to avoid blocking startup)
-_shopify_client: Optional[ShopifyClient] = None
-_knowledge_base: Optional[KnowledgeBase] = None
-_ticket_store: Optional[TicketStore] = None
+_shopify_client: ShopifyClient | None = None
+_knowledge_base: KnowledgeBase | None = None
+_ticket_store: TicketStore | None = None
 
 
 def _get_shopify_client() -> ShopifyClient:
@@ -61,11 +62,11 @@ TOOLS = [
             "properties": {
                 "order_number": {
                     "type": "string",
-                    "description": "The order number (e.g., '1042', '#1042', or 'ORD-1042')"
+                    "description": "The order number (e.g., '1042', '#1042', or 'ORD-1042')",
                 }
             },
-            "required": ["order_number"]
-        }
+            "required": ["order_number"],
+        },
     },
     {
         "name": "search_knowledge_base",
@@ -75,16 +76,16 @@ TOOLS = [
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "The search query (natural language question or topic)"
+                    "description": "The search query (natural language question or topic)",
                 },
                 "top_k": {
                     "type": "integer",
                     "description": "Number of results to return (default: 3, max: 10)",
-                    "default": 3
-                }
+                    "default": 3,
+                },
             },
-            "required": ["query"]
-        }
+            "required": ["query"],
+        },
     },
     {
         "name": "get_ticket",
@@ -94,11 +95,11 @@ TOOLS = [
             "properties": {
                 "ticket_id": {
                     "type": "string",
-                    "description": "The unique ticket identifier (UUID format)"
+                    "description": "The unique ticket identifier (UUID format)",
                 }
             },
-            "required": ["ticket_id"]
-        }
+            "required": ["ticket_id"],
+        },
     },
     {
         "name": "list_open_tickets",
@@ -109,11 +110,11 @@ TOOLS = [
                 "limit": {
                     "type": "integer",
                     "description": "Maximum number of tickets to return (default: 20, max: 50)",
-                    "default": 20
+                    "default": 20,
                 }
-            }
-        }
-    }
+            },
+        },
+    },
 ]
 
 
@@ -129,7 +130,7 @@ async def lookup_order(order_number: str) -> str:
         return "Shopify is not configured. Please set SHOPIFY_SHOP_DOMAIN and SHOPIFY_ACCESS_TOKEN in .env"
     except Exception as e:
         logger.error("mcp_lookup_order_error", order_number=order_number, error=str(e))
-        return f"Error looking up order: {str(e)}"
+        return f"Error looking up order: {e!s}"
 
 
 async def search_knowledge_base(query: str, top_k: int = 3) -> str:
@@ -141,7 +142,7 @@ async def search_knowledge_base(query: str, top_k: int = 3) -> str:
         results = await kb.search(query, top_k=top_k)
         if not results:
             return "No results found. The knowledge base may be empty or no content matches your query."
-        
+
         formatted = []
         for i, result in enumerate(results, 1):
             formatted.append(
@@ -152,7 +153,7 @@ async def search_knowledge_base(query: str, top_k: int = 3) -> str:
         return "\n\n".join(formatted)
     except Exception as e:
         logger.error("mcp_kb_search_error", query=query, error=str(e))
-        return f"Error searching knowledge base: {str(e)}"
+        return f"Error searching knowledge base: {e!s}"
 
 
 async def get_ticket(ticket_id: str) -> str:
@@ -162,10 +163,10 @@ async def get_ticket(ticket_id: str) -> str:
         result = await store.get(ticket_id)
         if result is None:
             return f"Ticket {ticket_id} not found"
-        
+
         ticket = result["ticket"]
         suggestion = result.get("suggestion")
-        
+
         lines = [
             f"Ticket {ticket_id}",
             f"Customer: {ticket.get('customer_email')}",
@@ -173,16 +174,16 @@ async def get_ticket(ticket_id: str) -> str:
             f"Category: {ticket.get('category')} | Priority: {ticket.get('priority')} | Status: {ticket.get('status')}",
             f"Created: {ticket.get('created_at')}",
         ]
-        
+
         if suggestion:
             lines.append(f"\nAI Suggestion:\n{suggestion}")
         else:
             lines.append("\nNo AI suggestion available for this ticket.")
-        
+
         return "\n".join(lines)
     except Exception as e:
         logger.error("mcp_get_ticket_error", ticket_id=ticket_id, error=str(e))
-        return f"Error retrieving ticket: {str(e)}"
+        return f"Error retrieving ticket: {e!s}"
 
 
 async def list_open_tickets(limit: int = 20) -> str:
@@ -192,16 +193,15 @@ async def list_open_tickets(limit: int = 20) -> str:
             limit = 50
         store = _get_ticket_store()
         all_tickets = await store.list(limit=limit)
-        
+
         # Filter to open/in-progress status
         open_tickets = [
-            t for t in all_tickets
-            if t["ticket"].get("status") in ("open", "in_progress")
+            t for t in all_tickets if t["ticket"].get("status") in ("open", "in_progress")
         ]
-        
+
         if not open_tickets:
             return "No open tickets found"
-        
+
         formatted = []
         for i, result in enumerate(open_tickets, 1):
             ticket = result["ticket"]
@@ -215,7 +215,7 @@ async def list_open_tickets(limit: int = 20) -> str:
         return "\n\n".join(formatted)
     except Exception as e:
         logger.error("mcp_list_tickets_error", error=str(e))
-        return f"Error listing tickets: {str(e)}"
+        return f"Error listing tickets: {e!s}"
 
 
 # Tool handler mapping
@@ -227,79 +227,64 @@ TOOL_HANDLERS = {
 }
 
 
-async def handle_tool_call(tool_name: str, arguments: Dict[str, Any]) -> str:
+async def handle_tool_call(tool_name: str, arguments: dict[str, Any]) -> str:
     """Handle a tool call from the MCP client."""
     handler = TOOL_HANDLERS.get(tool_name)
     if handler is None:
         return f"Unknown tool: {tool_name}"
-    
+
     return await handler(**arguments)
 
 
-def send_response(response: Dict[str, Any]) -> None:
+def send_response(response: dict[str, Any]) -> None:
     """Send a JSON-RPC response to stdout."""
     json.dump(response, sys.stdout)
     sys.stdout.write("\n")
     sys.stdout.flush()
 
 
-async def handle_request(request: Dict[str, Any]) -> None:
+async def handle_request(request: dict[str, Any]) -> None:
     """Handle an incoming JSON-RPC request."""
     method = request.get("method")
     params = request.get("params", {})
     request_id = request.get("id")
-    
+
     if method == "initialize":
-        send_response({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "protocolVersion": "2024-11-05",
-                "serverInfo": {
-                    "name": "support-agent",
-                    "version": "1.0.0"
+        send_response(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {
+                    "protocolVersion": "2024-11-05",
+                    "serverInfo": {"name": "support-agent", "version": "1.0.0"},
+                    "capabilities": {"tools": {}},
                 },
-                "capabilities": {
-                    "tools": {}
-                }
             }
-        })
-    
+        )
+
     elif method == "tools/list":
-        send_response({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "tools": TOOLS
-            }
-        })
-    
+        send_response({"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOLS}})
+
     elif method == "tools/call":
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
         result = await handle_tool_call(tool_name, arguments)
-        send_response({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "result": {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": result
-                    }
-                ]
+        send_response(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "result": {"content": [{"type": "text", "text": result}]},
             }
-        })
-    
+        )
+
     else:
-        send_response({
-            "jsonrpc": "2.0",
-            "id": request_id,
-            "error": {
-                "code": -32601,
-                "message": f"Method not found: {method}"
+        send_response(
+            {
+                "jsonrpc": "2.0",
+                "id": request_id,
+                "error": {"code": -32601, "message": f"Method not found: {method}"},
             }
-        })
+        )
 
 
 async def main():
@@ -307,41 +292,35 @@ async def main():
     # Initialize database connections
     kb = _get_knowledge_base()
     await kb.init()
-    
+
     store = _get_ticket_store()
     await store.init()
-    
+
     logger.info("mcp_server_starting", tenant=settings.TENANT_NAME)
-    
+
     # Read JSON-RPC requests from stdin
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
-        
+
         try:
             request = json.loads(line)
             await handle_request(request)
         except json.JSONDecodeError as e:
             logger.error("mcp_json_decode_error", error=str(e))
-            send_response({
-                "jsonrpc": "2.0",
-                "id": None,
-                "error": {
-                    "code": -32700,
-                    "message": "Parse error"
-                }
-            })
+            send_response(
+                {"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": "Parse error"}}
+            )
         except Exception as e:
             logger.error("mcp_request_error", error=str(e))
-            send_response({
-                "jsonrpc": "2.0",
-                "id": request.get("id") if isinstance(request, dict) else None,
-                "error": {
-                    "code": -32603,
-                    "message": f"Internal error: {str(e)}"
+            send_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": request.get("id") if isinstance(request, dict) else None,
+                    "error": {"code": -32603, "message": f"Internal error: {e!s}"},
                 }
-            })
+            )
 
 
 if __name__ == "__main__":

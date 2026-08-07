@@ -2,8 +2,10 @@
 with classifier/response_engine.  Uses AsyncMock to simulate provider failures
 so no real network calls are made."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+from pydantic import SecretStr
 
 from agent.config import settings
 from agent.llm import invoke_with_fallback
@@ -13,8 +15,6 @@ from agent.models import (
     TicketCategory,
     TicketPriority,
 )
-from pydantic import SecretStr
-
 
 # ── invoke_with_fallback unit tests ─────────────────────────
 
@@ -26,7 +26,9 @@ async def test_fallback_gemini_success_not_called():
     fallback = AsyncMock()
 
     result, model = await invoke_with_fallback(
-        primary, fallback, ["msg"],
+        primary,
+        fallback,
+        ["msg"],
         primary_model_name="gemini-2.0-flash",
         fallback_model_name="claude-haiku",
     )
@@ -40,14 +42,14 @@ async def test_fallback_gemini_success_not_called():
 async def test_fallback_gemini_fails_fallback_succeeds():
     """Gemini fails (non-retryable error), fallback configured -> fallback is called."""
     primary = AsyncMock()
-    primary.ainvoke = AsyncMock(
-        side_effect=ValueError("invalid API key")
-    )
+    primary.ainvoke = AsyncMock(side_effect=ValueError("invalid API key"))
     fallback = AsyncMock()
     fallback.ainvoke.return_value = {"parsed": "fallback_ok", "raw": None}
 
     result, model = await invoke_with_fallback(
-        primary, fallback, ["msg"],
+        primary,
+        fallback,
+        ["msg"],
         primary_model_name="gemini-2.0-flash",
         fallback_model_name="claude-haiku",
     )
@@ -65,7 +67,9 @@ async def test_fallback_gemini_fails_no_fallback_raises():
 
     with pytest.raises(ValueError, match="API key invalid"):
         await invoke_with_fallback(
-            primary, None, ["msg"],
+            primary,
+            None,
+            ["msg"],
             primary_model_name="gemini-2.0-flash",
             fallback_model_name="claude-haiku",
         )
@@ -94,14 +98,14 @@ async def test_fallback_classifier_records_fallback_model_name(monkeypatch):
         reasoning="test",
     )
     mock_parsed.model_dump.return_value = {
-        "category": "order_status", "priority": "normal",
-        "sentiment": "neutral", "reasoning": "test",
+        "category": "order_status",
+        "priority": "normal",
+        "sentiment": "neutral",
+        "reasoning": "test",
     }
 
     classifier.llm = MagicMock()
-    classifier.llm.ainvoke = AsyncMock(
-        side_effect=[ValueError("down"), ValueError("down")]
-    )
+    classifier.llm.ainvoke = AsyncMock(side_effect=[ValueError("down"), ValueError("down")])
     classifier.fallback_llm = MagicMock()
     classifier.fallback_llm.ainvoke = AsyncMock(return_value={"parsed": mock_parsed, "raw": None})
 
@@ -109,6 +113,7 @@ async def test_fallback_classifier_records_fallback_model_name(monkeypatch):
     monkeypatch.setattr("agent.classifier.record_llm_call", record_mock)
 
     from agent.models import SupportTicket
+
     ticket = SupportTicket(id="fb-cls", customer_email="a@b.com", subject="hi", body="hello")
     await classifier.classify(ticket)
 
@@ -135,8 +140,10 @@ async def test_fallback_classifier_records_primary_model_name(monkeypatch):
         reasoning="test",
     )
     mock_parsed.model_dump.return_value = {
-        "category": "order_status", "priority": "normal",
-        "sentiment": "neutral", "reasoning": "test",
+        "category": "order_status",
+        "priority": "normal",
+        "sentiment": "neutral",
+        "reasoning": "test",
     }
 
     classifier.llm = MagicMock()
@@ -147,14 +154,17 @@ async def test_fallback_classifier_records_primary_model_name(monkeypatch):
     monkeypatch.setattr("agent.classifier.record_llm_call", record_mock)
 
     from agent.models import SupportTicket
+
     ticket = SupportTicket(id="fb-cls-pri", customer_email="a@b.com", subject="hi", body="hello")
     await classifier.classify(ticket)
 
     assert record_mock.await_count == 1
     call_kwargs = record_mock.call_args.kwargs
     expected = (
-        settings.GROQ_MODEL if settings.GROQ_API_KEY
-        else settings.GEMINI_MODEL if settings.GOOGLE_API_KEY
+        settings.GROQ_MODEL
+        if settings.GROQ_API_KEY
+        else settings.GEMINI_MODEL
+        if settings.GOOGLE_API_KEY
         else settings.OPENROUTER_MODEL
     )
     assert call_kwargs["model"] == expected

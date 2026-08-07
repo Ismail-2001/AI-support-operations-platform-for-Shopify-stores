@@ -10,8 +10,6 @@ the public interface (handle_ticket, handle_followup) unchanged so api/customer_
 needs zero changes.
 """
 
-from typing import Optional
-
 import structlog
 
 from agent.classifier import TicketClassifier
@@ -46,7 +44,7 @@ class CustomerSupportAgent:
         await store.add_message(ticket.id, MessageSender.CUSTOMER.value, ticket.body)
         return await self._process(ticket)
 
-    async def handle_followup(self, ticket_id: str, message_body: str) -> Optional[AgentDecision]:
+    async def handle_followup(self, ticket_id: str, message_body: str) -> AgentDecision | None:
         """Entry point for a new customer message on an EXISTING ticket (thread continues)."""
         ticket = await store.get_ticket_model(ticket_id)
         if not ticket:
@@ -55,18 +53,20 @@ class CustomerSupportAgent:
         return await self._process(ticket)
 
     async def _process(self, ticket: SupportTicket) -> AgentDecision:
-        final_state = await self.graph.ainvoke({
-            "ticket": ticket,
-            "history": [],
-            "customer_message_count": 0,
-            "classification": None,
-            "order_context": None,
-            "order_used": False,
-            "knowledge_context": None,
-            "kb_used": False,
-            "suggestion": None,
-            "auto_sent": False,
-        })
+        final_state = await self.graph.ainvoke(
+            {
+                "ticket": ticket,
+                "history": [],
+                "customer_message_count": 0,
+                "classification": None,
+                "order_context": None,
+                "order_used": False,
+                "knowledge_context": None,
+                "kb_used": False,
+                "suggestion": None,
+                "auto_sent": False,
+            }
+        )
 
         return AgentDecision(
             ticket_id=ticket.id,

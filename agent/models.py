@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -52,43 +52,43 @@ class Sentiment(str, Enum):
 
 class SupportTicket(BaseModel):
     id: str
-    shop_domain: Optional[str] = None
+    shop_domain: str | None = None
     customer_email: str
-    customer_name: Optional[str] = None
+    customer_name: str | None = None
     subject: str
     body: str
     channel: TicketChannel = TicketChannel.EMAIL
-    order_id: Optional[str] = None
-    order_number: Optional[str] = None
-    product_id: Optional[str] = None
-    gorgias_ticket_id: Optional[str] = None
+    order_id: str | None = None
+    order_number: str | None = None
+    product_id: str | None = None
+    gorgias_ticket_id: str | None = None
     status: TicketStatus = TicketStatus.OPEN
-    category: Optional[TicketCategory] = None
-    priority: Optional[TicketPriority] = None
-    sentiment: Optional[Sentiment] = None
-    metadata: Dict[str, Any] = Field(default_factory=dict)
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    category: TicketCategory | None = None
+    priority: TicketPriority | None = None
+    sentiment: Sentiment | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class MessageSender(str, Enum):
     CUSTOMER = "customer"
-    AGENT = "agent"       # human agent
-    AI = "ai"              # this bot, when it auto-sent
+    AGENT = "agent"  # human agent
+    AI = "ai"  # this bot, when it auto-sent
 
 
 class TicketMessage(BaseModel):
-    id: Optional[int] = None
+    id: int | None = None
     ticket_id: str
     sender_type: MessageSender
     content: str
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class ClassificationResult(BaseModel):
     category: TicketCategory
     priority: TicketPriority
     sentiment: Sentiment
-    extracted_order_number: Optional[str] = Field(
+    extracted_order_number: str | None = Field(
         default=None,
         description="Order number mentioned in the ticket body, e.g. '#1042' or '1042'. Null if none found.",
     )
@@ -101,8 +101,8 @@ class ResponseSuggestion(BaseModel):
     confidence: float
     reasoning: str
     requires_human_review: bool
-    follow_up_questions: List[str] = Field(default_factory=list)
-    suggested_action: Optional["SuggestedAction"] = None
+    follow_up_questions: list[str] = Field(default_factory=list)
+    suggested_action: SuggestedAction | None = None
 
 
 class ActionType(str, Enum):
@@ -113,20 +113,20 @@ class ActionType(str, Enum):
 
 class SuggestedAction(BaseModel):
     type: ActionType = ActionType.NONE
-    order_id: Optional[str] = None
-    amount: Optional[float] = None
-    reason: Optional[str] = None
+    order_id: str | None = None
+    amount: float | None = None
+    reason: str | None = None
     # Actions are ALWAYS human-approved regardless of response confidence — see
     # api/customer_support.py's /actions/refund endpoint. This flag is informational only.
     requires_approval: bool = True
 
 
 class KnowledgeChunk(BaseModel):
-    id: Optional[int] = None
-    source: str                      # e.g. "policy:returns", "product:blue-hoodie"
+    id: int | None = None
+    source: str  # e.g. "policy:returns", "product:blue-hoodie"
     title: str
     content: str
-    score: Optional[float] = None    # similarity score, populated only on search results
+    score: float | None = None  # similarity score, populated only on search results
 
 
 class EditRecord(BaseModel):
@@ -135,8 +135,8 @@ class EditRecord(BaseModel):
     final_response: str
     was_edited: bool
     similarity: float
-    category: Optional[str] = None
-    created_at: str = Field(default_factory=lambda: datetime.utcnow().isoformat())
+    category: str | None = None
+    created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
 class AgentDecision(BaseModel):
@@ -150,12 +150,12 @@ class AgentDecision(BaseModel):
 class SupportAnalytics(BaseModel):
     total_tickets: int
     open_tickets: int
-    avg_response_time_hours: Optional[float] = None
-    avg_resolution_time_hours: Optional[float] = None
-    satisfaction_score: Optional[float] = None
-    first_contact_resolution_rate: Optional[float] = None
-    escalation_rate: Optional[float] = None
-    category_breakdown: Dict[str, int] = Field(default_factory=dict)
-    priority_breakdown: Dict[str, int] = Field(default_factory=dict)
-    channel_breakdown: Dict[str, int] = Field(default_factory=dict)
-    sentiment_distribution: Dict[str, int] = Field(default_factory=dict)
+    avg_response_time_hours: float | None = None
+    avg_resolution_time_hours: float | None = None
+    satisfaction_score: float | None = None
+    first_contact_resolution_rate: float | None = None
+    escalation_rate: float | None = None
+    category_breakdown: dict[str, int] = Field(default_factory=dict)
+    priority_breakdown: dict[str, int] = Field(default_factory=dict)
+    channel_breakdown: dict[str, int] = Field(default_factory=dict)
+    sentiment_distribution: dict[str, int] = Field(default_factory=dict)

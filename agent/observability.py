@@ -13,7 +13,7 @@ team needs to answer "why did it say that" and "are we about to blow the budget"
 adding an external service dependency. Swap for LangSmith/Langfuse if you outgrow this.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import structlog
 
@@ -43,9 +43,9 @@ async def record_llm_call(
     model: str,
     raw_message: Any,
     latency_ms: float,
-    input_summary: Dict[str, Any],
-    output_summary: Dict[str, Any],
-    prompt_version: Optional[str] = None,
+    input_summary: dict[str, Any],
+    output_summary: dict[str, Any],
+    prompt_version: str | None = None,
 ) -> float:
     """Returns cost_usd for this call, in case the caller wants it (e.g. for a response)."""
     from agent.storage import store  # local import avoids a circular import at module load
@@ -54,15 +54,25 @@ async def record_llm_call(
     cost_usd = _compute_cost(tokens_in, tokens_out, model)
 
     await store.log_trace(
-        ticket_id=ticket_id, stage=stage, model=model,
-        input_summary=input_summary, output_summary=output_summary,
-        latency_ms=round(latency_ms, 1), tokens_input=tokens_in, tokens_output=tokens_out,
-        cost_usd=cost_usd, prompt_version=prompt_version,
+        ticket_id=ticket_id,
+        stage=stage,
+        model=model,
+        input_summary=input_summary,
+        output_summary=output_summary,
+        latency_ms=round(latency_ms, 1),
+        tokens_input=tokens_in,
+        tokens_output=tokens_out,
+        cost_usd=cost_usd,
+        prompt_version=prompt_version,
     )
     if cost_usd > 0:
         await store.record_cost(
-            ticket_id=ticket_id, stage=stage, model=model,
-            tokens_input=tokens_in, tokens_output=tokens_out, cost_usd=cost_usd,
+            ticket_id=ticket_id,
+            stage=stage,
+            model=model,
+            tokens_input=tokens_in,
+            tokens_output=tokens_out,
+            cost_usd=cost_usd,
         )
     return cost_usd
 

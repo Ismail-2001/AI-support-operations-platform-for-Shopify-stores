@@ -5,9 +5,10 @@ Swap for Supabase/Postgres once you're running multiple workers or need concurre
 MVP, not as your permanent system of record).
 """
 
+import builtins
 import json
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import aiosqlite
 import structlog
@@ -115,7 +116,7 @@ CREATE INDEX IF NOT EXISTS idx_llm_costs_date ON llm_costs(date);
 
 
 class TicketStore:
-    def __init__(self, db_path: Optional[str] = None):
+    def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
 
     async def init(self):
@@ -147,10 +148,10 @@ class TicketStore:
     async def save(
         self,
         ticket: SupportTicket,
-        suggestion: Optional[ResponseSuggestion] = None,
+        suggestion: ResponseSuggestion | None = None,
         auto_sent: bool = False,
     ) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         gorgias_id = ticket.gorgias_ticket_id or (
             ticket.metadata.get("gorgias_ticket_id") if isinstance(ticket.metadata, dict) else None
         )
@@ -174,7 +175,7 @@ class TicketStore:
             )
             await db.commit()
 
-    async def get(self, ticket_id: str) -> Optional[Dict[str, Any]]:
+    async def get(self, ticket_id: str) -> dict[str, Any] | None:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM tickets WHERE id = ?", (ticket_id,))
@@ -183,12 +184,12 @@ class TicketStore:
 
     async def list(
         self,
-        status: Optional[str] = None,
-        category: Optional[str] = None,
-        priority: Optional[str] = None,
+        status: str | None = None,
+        category: str | None = None,
+        priority: str | None = None,
         page: int = 1,
         limit: int = 20,
-    ) -> List[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
@@ -206,23 +207,21 @@ class TicketStore:
             results = [r for r in results if r["ticket"].get("priority") == priority]
         return results
 
-    async def all(self) -> List[Dict[str, Any]]:
+    async def all(self) -> builtins.list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM tickets")
             rows = await cursor.fetchall()
             return [self._row_to_dict(r) for r in rows]
 
-    async def analytics(self) -> Dict[str, Any]:
+    async def analytics(self) -> dict[str, Any]:
         """Aggregate ticket stats via SQL — avoids loading all rows into memory."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT COUNT(*) as total FROM tickets")
             total = (await cursor.fetchone())["total"]
 
-            cursor = await db.execute(
-                "SELECT COUNT(*) as cnt FROM tickets WHERE auto_sent = 1"
-            )
+            cursor = await db.execute("SELECT COUNT(*) as cnt FROM tickets WHERE auto_sent = 1")
             auto_sent = (await cursor.fetchone())["cnt"]
 
             cursor = await db.execute(
@@ -233,13 +232,13 @@ class TicketStore:
             )
             open_count = sum(r["cnt"] for r in await cursor.fetchall())
 
-            async def _breakdown(col: str) -> Dict[str, int]:
+            async def _breakdown(col: str) -> dict[str, int]:
                 cursor = await db.execute(
                     f"SELECT json_extract(data, '$.{col}') as val, COUNT(*) as cnt"
                     f" FROM tickets WHERE json_extract(data, '$.{col}') IS NOT NULL"
                     f" AND json_extract(data, '$.{col}') != '' GROUP BY val"
                 )
-                return {r["val"]: r["cnt"] for r in cursor.fetchall()}
+                return {r["val"]: r["cnt"] for r in await cursor.fetchall()}
 
             return {
                 "total": total,
@@ -251,13 +250,13 @@ class TicketStore:
                 "sentiment_distribution": await _breakdown("sentiment"),
             }
 
-    async def update_status(self, ticket_id: str, **updates) -> Optional[Dict[str, Any]]:
+    async def update_status(self, ticket_id: str, **updates) -> dict[str, Any] | None:
         existing = await self.get(ticket_id)
         if not existing:
             return None
         ticket_data = existing["ticket"]
         ticket_data.update({k: v for k, v in updates.items() if v is not None})
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "UPDATE tickets SET data = ?, updated_at = ? WHERE id = ?",
@@ -266,14 +265,14 @@ class TicketStore:
             await db.commit()
         return await self.get(ticket_id)
 
-    async def get_ticket_model(self, ticket_id: str) -> Optional[SupportTicket]:
+    async def get_ticket_model(self, ticket_id: str) -> SupportTicket | None:
         """Rehydrate a full SupportTicket object from storage (for follow-up processing)."""
         row = await self.get(ticket_id)
         if not row:
             return None
         return SupportTicket(**row["ticket"])
 
-    async def get_ticket_by_gorgias_id(self, gorgias_ticket_id: str) -> Optional[SupportTicket]:
+    async def get_ticket_by_gorgias_id(self, gorgias_ticket_id: str) -> SupportTicket | None:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
@@ -286,7 +285,7 @@ class TicketStore:
             return SupportTicket(**json.loads(row["data"]))
 
     async def add_message(self, ticket_id: str, sender_type: str, content: str) -> TicketMessage:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "INSERT INTO messages (ticket_id, sender_type, content, created_at) VALUES (?, ?, ?, ?)",
@@ -294,9 +293,15 @@ class TicketStore:
             )
             await db.commit()
             message_id = cursor.lastrowid
-        return TicketMessage(id=message_id, ticket_id=ticket_id, sender_type=sender_type, content=content, created_at=now)
+        return TicketMessage(
+            id=message_id,
+            ticket_id=ticket_id,
+            sender_type=sender_type,
+            content=content,
+            created_at=now,
+        )
 
-    async def get_messages(self, ticket_id: str) -> List[TicketMessage]:
+    async def get_messages(self, ticket_id: str) -> builtins.list[TicketMessage]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
@@ -305,15 +310,22 @@ class TicketStore:
             rows = await cursor.fetchall()
             return [
                 TicketMessage(
-                    id=r["id"], ticket_id=r["ticket_id"], sender_type=r["sender_type"],
-                    content=r["content"], created_at=r["created_at"],
+                    id=r["id"],
+                    ticket_id=r["ticket_id"],
+                    sender_type=r["sender_type"],
+                    content=r["content"],
+                    created_at=r["created_at"],
                 )
                 for r in rows
             ]
 
     async def log_edit(
-        self, ticket_id: str, ai_suggestion: str, final_response: str,
-        category: Optional[str] = None, confidence: Optional[float] = None,
+        self,
+        ticket_id: str,
+        ai_suggestion: str,
+        final_response: str,
+        category: str | None = None,
+        confidence: float | None = None,
     ) -> None:
         """Called every time a human sends a reply that started from an AI draft. Tracking how
         much humans change the AI's drafts, broken down by category, is the honest version of
@@ -321,16 +333,25 @@ class TicketStore:
         exactly which categories need prompt work or more knowledge base content next."""
         similarity = _text_similarity(ai_suggestion, final_response)
         was_edited = similarity < 0.98
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO edit_records (ticket_id, ai_suggestion, final_response, was_edited, "
                 "similarity, category, confidence, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (ticket_id, ai_suggestion, final_response, int(was_edited), similarity, category, confidence, now),
+                (
+                    ticket_id,
+                    ai_suggestion,
+                    final_response,
+                    int(was_edited),
+                    similarity,
+                    category,
+                    confidence,
+                    now,
+                ),
             )
             await db.commit()
 
-    async def get_edit_stats(self) -> Dict[str, Any]:
+    async def get_edit_stats(self) -> dict[str, Any]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute("SELECT * FROM edit_records")
@@ -338,7 +359,7 @@ class TicketStore:
 
         total = len(rows)
         edited = sum(1 for r in rows if r["was_edited"])
-        by_category: Dict[str, Dict[str, Any]] = {}
+        by_category: dict[str, dict[str, Any]] = {}
         for r in rows:
             cat = r["category"] or "unknown"
             bucket = by_category.setdefault(cat, {"total": 0, "edited": 0, "avg_similarity": 0.0})
@@ -347,8 +368,12 @@ class TicketStore:
 
         for cat, bucket in by_category.items():
             cat_rows = [r for r in rows if (r["category"] or "unknown") == cat]
-            bucket["avg_similarity"] = round(sum(r["similarity"] for r in cat_rows) / len(cat_rows), 3)
-            bucket["edit_rate"] = round(bucket["edited"] / bucket["total"], 3) if bucket["total"] else 0.0
+            bucket["avg_similarity"] = round(
+                sum(r["similarity"] for r in cat_rows) / len(cat_rows), 3
+            )
+            bucket["edit_rate"] = (
+                round(bucket["edited"] / bucket["total"], 3) if bucket["total"] else 0.0
+            )
 
         return {
             "total_ai_drafts_sent": total,
@@ -357,7 +382,7 @@ class TicketStore:
             "by_category": by_category,
         }
 
-    async def get_refund_audit(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    async def get_refund_audit(self, idempotency_key: str) -> dict[str, Any] | None:
         """If this idempotency key was already processed, return the stored result instead
         of letting the caller re-execute a real refund."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -375,7 +400,9 @@ class TicketStore:
                 "amount": row["amount"],
                 "reason": row["reason"],
                 "status": row["status"],
-                "shopify_response": json.loads(row["shopify_response"]) if row["shopify_response"] else None,
+                "shopify_response": json.loads(row["shopify_response"])
+                if row["shopify_response"]
+                else None,
                 "error": row["error"],
                 "created_at": row["created_at"],
             }
@@ -388,22 +415,29 @@ class TicketStore:
         amount: float,
         reason: str,
         status: str,
-        shopify_response: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
+        shopify_response: dict[str, Any] | None = None,
+        error: str | None = None,
     ) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO refund_audit (idempotency_key, ticket_id, order_id, amount, reason, "
                 "status, shopify_response, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    idempotency_key, ticket_id, order_id, amount, reason, status,
-                    json.dumps(shopify_response) if shopify_response else None, error, now,
+                    idempotency_key,
+                    ticket_id,
+                    order_id,
+                    amount,
+                    reason,
+                    status,
+                    json.dumps(shopify_response) if shopify_response else None,
+                    error,
+                    now,
                 ),
             )
             await db.commit()
 
-    async def get_resend_audit(self, idempotency_key: str) -> Optional[Dict[str, Any]]:
+    async def get_resend_audit(self, idempotency_key: str) -> dict[str, Any] | None:
         """If this idempotency key was already processed, return the stored result instead
         of letting the caller re-execute a real reorder."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -419,7 +453,9 @@ class TicketStore:
                 "ticket_id": row["ticket_id"],
                 "order_id": row["order_id"],
                 "status": row["status"],
-                "shopify_response": json.loads(row["shopify_response"]) if row["shopify_response"] else None,
+                "shopify_response": json.loads(row["shopify_response"])
+                if row["shopify_response"]
+                else None,
                 "error": row["error"],
                 "created_at": row["created_at"],
             }
@@ -430,37 +466,49 @@ class TicketStore:
         ticket_id: str,
         order_id: str,
         status: str,
-        shopify_response: Optional[Dict[str, Any]] = None,
-        error: Optional[str] = None,
+        shopify_response: dict[str, Any] | None = None,
+        error: str | None = None,
     ) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO resend_audit (idempotency_key, ticket_id, order_id, status, "
                 "shopify_response, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
-                    idempotency_key, ticket_id, order_id, status,
-                    json.dumps(shopify_response) if shopify_response else None, error, now,
+                    idempotency_key,
+                    ticket_id,
+                    order_id,
+                    status,
+                    json.dumps(shopify_response) if shopify_response else None,
+                    error,
+                    now,
                 ),
             )
             await db.commit()
 
-    async def get_processed_webhook_event(self, event_id: str, source: str) -> Optional[Dict[str, Any]]:
+    async def get_processed_webhook_event(
+        self, event_id: str, source: str
+    ) -> dict[str, Any] | None:
         """If this webhook event was already processed, return it so the caller can skip
         re-processing instead of duplicating work."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
-                "SELECT * FROM processed_webhook_events WHERE event_id = ? AND source = ?", (event_id, source)
+                "SELECT * FROM processed_webhook_events WHERE event_id = ? AND source = ?",
+                (event_id, source),
             )
             row = await cursor.fetchone()
             if not row:
                 return None
-            return {"event_id": row["event_id"], "source": row["source"], "processed_at": row["processed_at"]}
+            return {
+                "event_id": row["event_id"],
+                "source": row["source"],
+                "processed_at": row["processed_at"],
+            }
 
     async def record_processed_webhook_event(self, event_id: str, source: str) -> None:
         """Mark a webhook event as successfully processed so redeliveries are ignored."""
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO processed_webhook_events (event_id, source, processed_at) VALUES (?, ?, ?)",
@@ -468,7 +516,7 @@ class TicketStore:
             )
             await db.commit()
 
-    async def get_calibration_report(self) -> Dict[str, Any]:
+    async def get_calibration_report(self) -> dict[str, Any]:
         """Confidence calibration: buckets past AI drafts by their confidence score and shows
         the edit rate within each bucket. A well-calibrated model's high-confidence bucket
         should have a LOW edit rate — if 0.85-0.95-confidence drafts get edited as often as
@@ -476,12 +524,18 @@ class TicketStore:
         AUTO_SEND_MIN_CONFIDENCE needs to be raised (or the model needs better prompting)."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM edit_records WHERE confidence IS NOT NULL"
-            )
+            cursor = await db.execute("SELECT * FROM edit_records WHERE confidence IS NOT NULL")
             rows = await cursor.fetchall()
 
-        buckets = [(0.0, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.85), (0.85, 0.9), (0.9, 1.01)]
+        buckets = [
+            (0.0, 0.5),
+            (0.5, 0.6),
+            (0.6, 0.7),
+            (0.7, 0.8),
+            (0.8, 0.85),
+            (0.85, 0.9),
+            (0.9, 1.01),
+        ]
         report = {}
         for lo, hi in buckets:
             label = f"{lo:.2f}-{hi:.2f}" if hi <= 1.0 else f"{lo:.2f}-1.00"
@@ -490,7 +544,10 @@ class TicketStore:
                 report[label] = {"count": 0, "edit_rate": None}
                 continue
             edited = sum(1 for r in in_bucket if r["was_edited"])
-            report[label] = {"count": len(in_bucket), "edit_rate": round(edited / len(in_bucket), 3)}
+            report[label] = {
+                "count": len(in_bucket),
+                "edit_rate": round(edited / len(in_bucket), 3),
+            }
 
         return {
             "buckets": report,
@@ -507,23 +564,41 @@ class TicketStore:
     # ── Tracing (observability) ────────────────────────────────
 
     async def log_trace(
-        self, ticket_id: str, stage: str, input_summary: Dict[str, Any], output_summary: Dict[str, Any],
-        latency_ms: Optional[float] = None, model: Optional[str] = None,
-        tokens_input: Optional[int] = None, tokens_output: Optional[int] = None, cost_usd: Optional[float] = None,
-        prompt_version: Optional[str] = None,
+        self,
+        ticket_id: str,
+        stage: str,
+        input_summary: dict[str, Any],
+        output_summary: dict[str, Any],
+        latency_ms: float | None = None,
+        model: str | None = None,
+        tokens_input: int | None = None,
+        tokens_output: int | None = None,
+        cost_usd: float | None = None,
+        prompt_version: str | None = None,
     ) -> None:
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO traces (ticket_id, stage, model, prompt_version, input_summary, output_summary, "
                 "latency_ms, tokens_input, tokens_output, cost_usd, created_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (ticket_id, stage, model, prompt_version, json.dumps(input_summary), json.dumps(output_summary),
-                 latency_ms, tokens_input, tokens_output, cost_usd, now),
+                (
+                    ticket_id,
+                    stage,
+                    model,
+                    prompt_version,
+                    json.dumps(input_summary),
+                    json.dumps(output_summary),
+                    latency_ms,
+                    tokens_input,
+                    tokens_output,
+                    cost_usd,
+                    now,
+                ),
             )
             await db.commit()
 
-    async def get_traces(self, ticket_id: str) -> List[Dict[str, Any]]:
+    async def get_traces(self, ticket_id: str) -> builtins.list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
@@ -532,12 +607,15 @@ class TicketStore:
             rows = await cursor.fetchall()
         return [
             {
-                "stage": r["stage"], "model": r["model"],
+                "stage": r["stage"],
+                "model": r["model"],
                 "prompt_version": r["prompt_version"],
                 "input_summary": json.loads(r["input_summary"]),
                 "output_summary": json.loads(r["output_summary"]),
-                "latency_ms": r["latency_ms"], "tokens_input": r["tokens_input"],
-                "tokens_output": r["tokens_output"], "cost_usd": r["cost_usd"],
+                "latency_ms": r["latency_ms"],
+                "tokens_input": r["tokens_input"],
+                "tokens_output": r["tokens_output"],
+                "cost_usd": r["cost_usd"],
                 "created_at": r["created_at"],
             }
             for r in rows
@@ -546,11 +624,16 @@ class TicketStore:
     # ── Cost governance ─────────────────────────────────────────
 
     async def record_cost(
-        self, ticket_id: Optional[str], stage: str, model: str,
-        tokens_input: int, tokens_output: int, cost_usd: float,
+        self,
+        ticket_id: str | None,
+        stage: str,
+        model: str,
+        tokens_input: int,
+        tokens_output: int,
+        cost_usd: float,
     ) -> None:
-        today = datetime.utcnow().strftime("%Y-%m-%d")
-        now = datetime.utcnow().isoformat()
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO llm_costs (date, ticket_id, stage, model, tokens_input, tokens_output, "
@@ -560,7 +643,7 @@ class TicketStore:
             await db.commit()
 
     async def get_today_cost_usd(self) -> float:
-        today = datetime.utcnow().strftime("%Y-%m-%d")
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
         async with aiosqlite.connect(self.db_path) as db:
             cursor = await db.execute(
                 "SELECT COALESCE(SUM(cost_usd), 0) FROM llm_costs WHERE date = ?", (today,)
@@ -568,19 +651,26 @@ class TicketStore:
             row = await cursor.fetchone()
             return round(row[0], 6) if row else 0.0
 
-    async def get_cost_report(self, days: int = 7) -> Dict[str, Any]:
+    async def get_cost_report(self, days: int = 7) -> dict[str, Any]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             cursor = await db.execute(
                 "SELECT date, SUM(cost_usd) as total, COUNT(*) as calls "
-                "FROM llm_costs GROUP BY date ORDER BY date DESC LIMIT ?", (days,)
+                "FROM llm_costs GROUP BY date ORDER BY date DESC LIMIT ?",
+                (days,),
             )
-            by_day = [{"date": r["date"], "cost_usd": round(r["total"], 6), "calls": r["calls"]} for r in await cursor.fetchall()]
+            by_day = [
+                {"date": r["date"], "cost_usd": round(r["total"], 6), "calls": r["calls"]}
+                for r in await cursor.fetchall()
+            ]
 
             cursor = await db.execute(
                 "SELECT stage, SUM(cost_usd) as total, COUNT(*) as calls FROM llm_costs GROUP BY stage"
             )
-            by_stage = [{"stage": r["stage"], "cost_usd": round(r["total"], 6), "calls": r["calls"]} for r in await cursor.fetchall()]
+            by_stage = [
+                {"stage": r["stage"], "cost_usd": round(r["total"], 6), "calls": r["calls"]}
+                for r in await cursor.fetchall()
+            ]
 
         return {
             "today_usd": await self.get_today_cost_usd(),
@@ -589,7 +679,7 @@ class TicketStore:
         }
 
     @staticmethod
-    def _row_to_dict(row) -> Dict[str, Any]:
+    def _row_to_dict(row) -> dict[str, Any]:
         return {
             "ticket": json.loads(row["data"]),
             "suggestion": json.loads(row["suggestion"]) if row["suggestion"] else None,
@@ -603,6 +693,7 @@ def _text_similarity(a: str, b: str) -> float:
     """Cheap, dependency-free similarity: difflib ratio. Good enough to flag 'basically untouched'
     vs 'meaningfully rewritten' — not meant to be a precise NLP metric."""
     import difflib
+
     return difflib.SequenceMatcher(None, a.strip(), b.strip()).ratio()
 
 

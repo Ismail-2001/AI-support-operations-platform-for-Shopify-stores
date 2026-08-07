@@ -4,6 +4,49 @@ services:
     ports:
       - "8001:8001"
     environment:
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      # ── Tenant ──────────────────────────────────────────
+      - TENANT_NAME=${TENANT_NAME}
+      # ── LLM ─────────────────────────────────────────────
+      - GROQ_API_KEY=${GROQ_API_KEY}
+      - GROQ_MODEL=${GROQ_MODEL:-llama-3.3-70b-versatile}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-openai/gpt-4o-mini}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - FALLBACK_MODEL=${FALLBACK_MODEL:-claude-haiku-4-5-20251001}
+      # ── Shopify ─────────────────────────────────────────
+      - SHOPIFY_SHOP_DOMAIN=${SHOPIFY_SHOP_DOMAIN:-}
+      - SHOPIFY_ACCESS_TOKEN=${SHOPIFY_ACCESS_TOKEN:-}
+      # ── Gorgias ─────────────────────────────────────────
+      - GORGIAS_DOMAIN=${GORGIAS_DOMAIN:-}
+      - GORGIAS_EMAIL=${GORGIAS_EMAIL:-}
+      - GORGIAS_API_KEY=${GORGIAS_API_KEY:-}
+      - GORGIAS_WEBHOOK_SECRET=${GORGIAS_WEBHOOK_SECRET:-}
+      # ── Automation policy ───────────────────────────────
+      - AUTO_SEND_ENABLED=${AUTO_SEND_ENABLED:-false}
+      - AUTO_SEND_MIN_CONFIDENCE=${AUTO_SEND_MIN_CONFIDENCE:-0.85}
+      - AUTO_SEND_BLOCKED_CATEGORIES=${AUTO_SEND_BLOCKED_CATEGORIES:-refund,complaint,legal,other}
+      # ── Storage ─────────────────────────────────────────
+      - DB_PATH=${DB_PATH:-cs_agent.db}
+      - ENV=${ENV:-development}
+      # ── API Security ────────────────────────────────────
+      - API_KEY=${API_KEY}
+      - REQUIRE_API_KEY=${REQUIRE_API_KEY:-true}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-http://localhost:5173}
+      - RATE_LIMIT_PER_MINUTE=${RATE_LIMIT_PER_MINUTE:-60}
+      - REFUND_RATE_LIMIT_PER_MINUTE=${REFUND_RATE_LIMIT_PER_MINUTE:-10}
+      - RESEND_RATE_LIMIT_PER_MINUTE=${RESEND_RATE_LIMIT_PER_MINUTE:-10}
+      - INBOUND_WEBHOOK_SECRET=${INBOUND_WEBHOOK_SECRET:-}
+      # ── Cost governance ───────────────────────────────────
+      - DAILY_COST_CAP_USD=${DAILY_COST_CAP_USD:-5.0}
+    volumes:
+      - cs-agent-data:/app/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+volumes:
+  cs-agent-data:

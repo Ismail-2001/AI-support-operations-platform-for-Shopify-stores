@@ -32,21 +32,25 @@ def compare(report_a: dict, report_b: dict) -> dict:
         r_a = results_a.get(cid)
         r_b = results_b.get(cid)
         if r_a is None or r_b is None:
-            flipped.append({
-                "case_id": cid,
-                "change": "added" if r_a is None else "removed",
-                "passed_before": r_a["passed"] if r_a else None,
-                "passed_after": r_b["passed"] if r_b else None,
-            })
+            flipped.append(
+                {
+                    "case_id": cid,
+                    "change": "added" if r_a is None else "removed",
+                    "passed_before": r_a["passed"] if r_a else None,
+                    "passed_after": r_b["passed"] if r_b else None,
+                }
+            )
         elif r_a["passed"] != r_b["passed"]:
-            flipped.append({
-                "case_id": cid,
-                "change": "flip",
-                "passed_before": r_a["passed"],
-                "passed_after": r_b["passed"],
-                "failures_before": r_a.get("failures", []),
-                "failures_after": r_b.get("failures", []),
-            })
+            flipped.append(
+                {
+                    "case_id": cid,
+                    "change": "flip",
+                    "passed_before": r_a["passed"],
+                    "passed_after": r_b["passed"],
+                    "failures_before": r_a.get("failures", []),
+                    "failures_after": r_b.get("failures", []),
+                }
+            )
 
     sa = report_a["summary"]
     sb = report_b["summary"]
@@ -92,7 +96,7 @@ def print_diff(diff: dict) -> None:
     ra = diff["report_a"]
     rb = diff["report_b"]
 
-    print(f"Comparing:")
+    print("Comparing:")
     print(f"  A: {ra['path']}  (v{ra['versions']['prompt']})")
     print(f"  B: {rb['path']}  (v{rb['versions']['prompt']})")
     print()
@@ -119,8 +123,16 @@ def print_diff(diff: dict) -> None:
     print("Summary deltas:")
     prd = diff["pass_rate_delta"]
     cad = diff["category_accuracy_delta"]
-    print(f"  Pass rate:          {ra['pass_rate']} → {rb['pass_rate']}  ({_sign(prd)}{prd:.1%})" if prd is not None else "  Pass rate:          N/A")
-    print(f"  Category accuracy:  {ra['category_accuracy']} → {rb['category_accuracy']}  ({_sign(cad)}{cad:.1%})" if cad is not None else "  Category accuracy:  N/A")
+    print(
+        f"  Pass rate:          {ra['pass_rate']} → {rb['pass_rate']}  ({_sign(prd)}{prd:.1%})"
+        if prd is not None
+        else "  Pass rate:          N/A"
+    )
+    print(
+        f"  Category accuracy:  {ra['category_accuracy']} → {rb['category_accuracy']}  ({_sign(cad)}{cad:.1%})"
+        if cad is not None
+        else "  Category accuracy:  N/A"
+    )
 
 
 def _sign(val: float | None) -> str:

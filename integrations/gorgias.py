@@ -1,9 +1,10 @@
 """Minimal Gorgias REST API client — fetch tickets, post replies, normalize into our SupportTicket model."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 import structlog
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from agent.config import settings
 from agent.models import SupportTicket, TicketChannel
@@ -15,6 +16,35 @@ class GorgiasNotConfigured(Exception):
     pass
 
 
+_EXP_BACKOFF = dict(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=8),
+)
+
+
+def _is_transient_gorgias_error(exc: BaseException) -> bool:
+    """Transient = 5xx server error, timeout, or connection error.
+    4xx client errors are never retried — they mean the request itself is wrong."""
+    if isinstance(exc, httpx.TimeoutException):
+        return True
+    if isinstance(exc, httpx.TransportError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600:
+        return True
+    return False
+
+
+def _log_retry_attempt(retry_state) -> None:
+    fn_name = getattr(retry_state.fn, "__name__", str(retry_state.fn))
+    logger.warning(
+        "gorgias_retry",
+        function=fn_name,
+        attempt=retry_state.attempt_number,
+        error=str(retry_state.outcome.exception()),
+        error_type=type(retry_state.outcome.exception()).__name__,
+    )
+
+
 class GorgiasClient:
     def __init__(self):
         self.enabled = bool(
@@ -24,7 +54,12 @@ class GorgiasClient:
             self.base_url = f"https://{settings.GORGIAS_DOMAIN}.gorgias.com/api"
             self.auth = (settings.GORGIAS_EMAIL, settings.GORGIAS_API_KEY.get_secret_value())
 
-    async def list_open_tickets(self, limit: int = 20) -> List[Dict[str, Any]]:
+    @retry(
+        retry=retry_if_exception(_is_transient_gorgias_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def list_open_tickets(self, limit: int = 20) -> list[dict[str, Any]]:
         if not self.enabled:
             raise GorgiasNotConfigured("Gorgias credentials not set in .env")
         async with httpx.AsyncClient(timeout=15, auth=self.auth) as client:
@@ -35,7 +70,12 @@ class GorgiasClient:
             resp.raise_for_status()
             return resp.json().get("data", [])
 
-    async def get_ticket_messages(self, ticket_id: str) -> List[Dict[str, Any]]:
+    @retry(
+        retry=retry_if_exception(_is_transient_gorgias_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_ticket_messages(self, ticket_id: str) -> list[dict[str, Any]]:
         if not self.enabled:
             raise GorgiasNotConfigured("Gorgias credentials not set in .env")
         async with httpx.AsyncClient(timeout=15, auth=self.auth) as client:
@@ -43,7 +83,14 @@ class GorgiasClient:
             resp.raise_for_status()
             return resp.json().get("data", [])
 
-    async def post_reply(self, ticket_id: str, body_html: str, channel: str = "email") -> Dict[str, Any]:
+    @retry(
+        retry=retry_if_exception(_is_transient_gorgias_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def post_reply(
+        self, ticket_id: str, body_html: str, channel: str = "email"
+    ) -> dict[str, Any]:
         """Posts a reply that actually sends to the customer. Only call this for auto-send-eligible tickets."""
         if not self.enabled:
             raise GorgiasNotConfigured("Gorgias credentials not set in .env")
@@ -61,7 +108,12 @@ class GorgiasClient:
             resp.raise_for_status()
             return resp.json()
 
-    async def add_internal_note(self, ticket_id: str, note: str) -> Dict[str, Any]:
+    @retry(
+        retry=retry_if_exception(_is_transient_gorgias_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def add_internal_note(self, ticket_id: str, note: str) -> dict[str, Any]:
         """For low-confidence tickets: attach the AI draft as an internal note instead of sending it."""
         if not self.enabled:
             raise GorgiasNotConfigured("Gorgias credentials not set in .env")
@@ -80,7 +132,7 @@ class GorgiasClient:
             return resp.json()
 
     @staticmethod
-    def normalize_webhook_payload(payload: Dict[str, Any]) -> SupportTicket:
+    def normalize_webhook_payload(payload: dict[str, Any]) -> SupportTicket:
         """Gorgias 'ticket-created' webhook payload -> our SupportTicket model."""
         ticket = payload.get("ticket", payload)
         customer = ticket.get("customer", {}) or {}

@@ -5,10 +5,12 @@ it doesn't false-positive."""
 
 from types import SimpleNamespace
 
-from evals.scoring import score_case, summarize, CaseResult
+from evals.scoring import CaseResult, score_case, summarize
 
 
-def _classification(category="order_status", priority="normal", sentiment="neutral", extracted_order_number=None):
+def _classification(
+    category="order_status", priority="normal", sentiment="neutral", extracted_order_number=None
+):
     return SimpleNamespace(
         category=SimpleNamespace(value=category),
         priority=SimpleNamespace(value=priority),
@@ -17,9 +19,14 @@ def _classification(category="order_status", priority="normal", sentiment="neutr
     )
 
 
-def _suggestion(confidence=0.9, requires_human_review=False, suggested_response="Here is your answer."):
-    return SimpleNamespace(confidence=confidence, requires_human_review=requires_human_review,
-                            suggested_response=suggested_response)
+def _suggestion(
+    confidence=0.9, requires_human_review=False, suggested_response="Here is your answer."
+):
+    return SimpleNamespace(
+        confidence=confidence,
+        requires_human_review=requires_human_review,
+        suggested_response=suggested_response,
+    )
 
 
 def test_correct_category_passes():
@@ -71,7 +78,8 @@ def test_forbidden_phrase_in_response_is_caught():
     a fake refund, the eval must catch it, not just check the category label."""
     case = {"id": "c7", "response_checks": {"must_not_contain": ["refund has been processed"]}}
     result = score_case(
-        case, _classification(),
+        case,
+        _classification(),
         _suggestion(suggested_response="Sure! Your refund has been processed, all done."),
     )
     assert not result.passed
@@ -80,7 +88,9 @@ def test_forbidden_phrase_in_response_is_caught():
 
 def test_missing_required_phrase_is_caught():
     case = {"id": "c8", "response_checks": {"must_contain_one_of": ["order number"]}}
-    result = score_case(case, _classification(), _suggestion(suggested_response="Sure, happy to help!"))
+    result = score_case(
+        case, _classification(), _suggestion(suggested_response="Sure, happy to help!")
+    )
     assert not result.passed
 
 

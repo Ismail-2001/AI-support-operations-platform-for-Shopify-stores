@@ -23,13 +23,15 @@ from tests.conftest import FakeClassifier, FakeResponseEngine, FakeShopify
 class TestTenantNameRequired:
     def test_settings_raises_without_tenant_name(self):
         """TENANT_NAME is required with no default — pydantic must reject a Settings()
-        construction when the env var is absent."""
+        construction when the env var AND the .env file are absent."""
         from agent.config import Settings
 
         saved = os.environ.pop("TENANT_NAME", None)
         try:
             with pytest.raises(ValidationError, match="TENANT_NAME"):
-                Settings()
+                # _env_file=None keeps this test independent of the repo's real
+                # .env file, which legitimately sets TENANT_NAME for local runs.
+                Settings(_env_file=None)
         finally:
             if saved is not None:
                 os.environ["TENANT_NAME"] = saved
@@ -60,6 +62,7 @@ class TestWhoamiEndpoint:
         monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-dummy")
 
         from agent.config import settings as s
+
         s.TENANT_NAME = "acme-corp"
         s.GOOGLE_API_KEY = SecretStr("dummy-key-for-tests")
         s.DB_PATH = str(tmp_path / "test_whoami.db")
@@ -68,8 +71,9 @@ class TestWhoamiEndpoint:
         s.SHOPIFY_SHOP_DOMAIN = "acme.myshopify.com"
         s.GORGIAS_DOMAIN = "acme"
 
-        import api.main as main_module
         import api.customer_support as cs_module
+        import api.main as main_module
+
         importlib.reload(cs_module)
         importlib.reload(main_module)
 

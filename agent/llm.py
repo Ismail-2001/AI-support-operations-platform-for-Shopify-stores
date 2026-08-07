@@ -7,7 +7,7 @@ chain-of-responsibility — the call sites stay the same.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import httpx
 import structlog
@@ -79,7 +79,7 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
     )
 
 
-def get_fallback_llm(temperature: float = 0.0) -> Optional[ChatAnthropic]:
+def get_fallback_llm(temperature: float = 0.0) -> ChatAnthropic | None:
     """Return a Claude client if ANTHROPIC_API_KEY is configured, else None."""
     if not settings.ANTHROPIC_API_KEY:
         return None
@@ -97,7 +97,7 @@ async def invoke_with_fallback(
     messages: list,
     primary_model_name: str,
     fallback_model_name: str,
-) -> Tuple[Dict[str, Any], str]:
+) -> tuple[dict[str, Any], str]:
     """Retry ``primary_chain`` up to 3 times (exponential backoff 1s/2s/4s) on transient
     errors only.  If all retries are exhausted *and* ``fallback_chain`` is available, try
     the fallback once.  Returns ``(raw_result, model_name)`` so the caller can record which
@@ -106,7 +106,7 @@ async def invoke_with_fallback(
     If no fallback is configured, or the fallback also fails, the original exception from
     the last primary attempt is re-raised.
     """
-    last_error: Optional[Exception] = None
+    last_error: Exception | None = None
 
     try:
         async for attempt in AsyncRetrying(
@@ -154,7 +154,6 @@ def get_embeddings_client() -> GoogleGenerativeAIEmbeddings:
     return _embeddings_client
 
 
-async def embed_text(text: str, timeout: float = 15.0) -> List[float]:
+async def embed_text(text: str, timeout: float = 15.0) -> list[float]:
     client = get_embeddings_client()
     return await asyncio.wait_for(client.aembed_query(text), timeout=timeout)
-

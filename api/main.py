@@ -6,6 +6,10 @@ One deployed instance serves exactly one client. Do NOT route multiple clients t
 the same instance — the tenant name is a deployment-time label, not a row-level filter.
 """
 
+import asyncio
+import sys
+from contextlib import asynccontextmanager
+
 import structlog
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +18,8 @@ from fastapi.responses import JSONResponse
 from agent.config import settings
 from agent.knowledge_base import knowledge_base
 from agent.storage import store
-from api.customer_support import public_router, router as support_router, webhook_router
+from api.customer_support import public_router, webhook_router
+from api.customer_support import router as support_router
 
 structlog.configure(
     processors=[
@@ -25,10 +30,55 @@ structlog.configure(
 )
 logger = structlog.get_logger(__name__)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Handles graceful shutdown on SIGTERM/SIGINT.
+    Allows in-flight requests to complete before shutting down."""
+    # Startup
+    structlog.contextvars.bind_contextvars(tenant_name=settings.TENANT_NAME)
+
+    logger.info(
+        "tenant_startup",
+        tenant_name=settings.TENANT_NAME,
+        db_path=settings.DB_PATH,
+        shopify_domain=settings.SHOPIFY_SHOP_DOMAIN,
+        gorgias_domain=settings.GORGIAS_DOMAIN,
+    )
+
+    if settings.REQUIRE_API_KEY and not settings.API_KEY:
+        logger.warning(
+            "startup_warning_no_api_key",
+            message="REQUIRE_API_KEY is true but API_KEY is unset — every protected "
+            "request will fail with a clear 500 until you set API_KEY in .env.",
+        )
+    await store.init()
+    await knowledge_base.init()
+    logger.info("cs_agent_started", tenant_name=settings.TENANT_NAME)
+
+    # Signal handlers only work on Unix; on Windows, SIGTERM is not supported
+    # by add_signal_handler. Uvicorn handles SIGINT natively anyway.
+    if sys.platform != "win32":
+        shutdown_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
+        import signal
+
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, shutdown_event.set)
+        await shutdown_event.wait()
+        logger.info("shutdown_initiated", tenant_name=settings.TENANT_NAME)
+        await asyncio.sleep(5)
+
+    yield
+
+    logger.info("shutdown_complete", tenant_name=settings.TENANT_NAME)
+
+
 app = FastAPI(
     title="Customer Support Agent",
     description="AI-powered customer support automation for ecommerce — Shopify + Gorgias connected.",
     version="2.0.0",
+    lifespan=lifespan,
 )
 
 # CORS: only your dashboard's own domain(s) should be allowed to call this from a browser.
@@ -55,31 +105,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     # server-side and return a generic message.
     logger.error("unhandled_exception", path=request.url.path, error=str(exc))
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-
-
-@app.on_event("startup")
-async def on_startup():
-    # Bind the tenant name into every subsequent structlog call's context so log
-    # lines across the entire application are unambiguously attributed.
-    structlog.contextvars.bind_contextvars(tenant_name=settings.TENANT_NAME)
-
-    logger.info(
-        "tenant_startup",
-        tenant_name=settings.TENANT_NAME,
-        db_path=settings.DB_PATH,
-        shopify_domain=settings.SHOPIFY_SHOP_DOMAIN,
-        gorgias_domain=settings.GORGIAS_DOMAIN,
-    )
-
-    if settings.REQUIRE_API_KEY and not settings.API_KEY:
-        logger.warning(
-            "startup_warning_no_api_key",
-            message="REQUIRE_API_KEY is true but API_KEY is unset — every protected "
-            "request will fail with a clear 500 until you set API_KEY in .env.",
-        )
-    await store.init()
-    await knowledge_base.init()
-    logger.info("cs_agent_started", tenant_name=settings.TENANT_NAME)
 
 
 @app.get("/health")

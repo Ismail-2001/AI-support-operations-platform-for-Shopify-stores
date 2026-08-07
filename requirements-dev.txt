@@ -3,3 +3,9 @@
 
 pytest==8.3.3
 pytest-asyncio==0.24.0
+
+# Linting & formatting
+ruff==0.6.9
+
+# Pre-commit hooks
+pre-commit==3.8.0

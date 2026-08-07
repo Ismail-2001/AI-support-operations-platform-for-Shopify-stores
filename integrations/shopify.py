@@ -1,6 +1,6 @@
 """Minimal Shopify Admin API client — just what the support agent needs: order lookup."""
 
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import httpx
 import structlog
@@ -54,14 +54,20 @@ class ShopifyClient:
     def __init__(self):
         self.enabled = bool(settings.SHOPIFY_SHOP_DOMAIN and settings.SHOPIFY_ACCESS_TOKEN)
         if self.enabled:
-            self.base_url = f"https://{settings.SHOPIFY_SHOP_DOMAIN}/admin/api/{settings.SHOPIFY_API_VERSION}"
+            self.base_url = (
+                f"https://{settings.SHOPIFY_SHOP_DOMAIN}/admin/api/{settings.SHOPIFY_API_VERSION}"
+            )
             self.headers = {
                 "X-Shopify-Access-Token": settings.SHOPIFY_ACCESS_TOKEN.get_secret_value(),
                 "Content-Type": "application/json",
             }
 
-    @retry(retry=retry_if_exception(_is_transient_shopify_error), before_sleep=_log_retry_attempt, **_EXP_BACKOFF)
-    async def get_order_by_number(self, order_number: str) -> Optional[Dict[str, Any]]:
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_order_by_number(self, order_number: str) -> dict[str, Any] | None:
         """order_number can be '1042', '#1042', or 'ORD-1042' — we normalize to Shopify's 'name' filter."""
         if not self.enabled:
             raise ShopifyNotConfigured("Shopify credentials not set in .env")
@@ -80,7 +86,12 @@ class ShopifyClient:
             orders = resp.json().get("orders", [])
             return orders[0] if orders else None
 
-    async def get_recent_orders_by_email(self, email: str, limit: int = 3) -> list[Dict[str, Any]]:
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_recent_orders_by_email(self, email: str, limit: int = 3) -> list[dict[str, Any]]:
         if not self.enabled:
             raise ShopifyNotConfigured("Shopify credentials not set in .env")
 
@@ -88,13 +99,22 @@ class ShopifyClient:
             resp = await client.get(
                 f"{self.base_url}/orders.json",
                 headers=self.headers,
-                params={"email": email, "status": "any", "limit": limit, "order": "created_at desc"},
+                params={
+                    "email": email,
+                    "status": "any",
+                    "limit": limit,
+                    "order": "created_at desc",
+                },
             )
             resp.raise_for_status()
             return resp.json().get("orders", [])
 
-    @retry(retry=retry_if_exception(_is_transient_shopify_error), before_sleep=_log_retry_attempt, **_EXP_BACKOFF)
-    async def get_order_by_id(self, order_id: str) -> Optional[Dict[str, Any]]:
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_order_by_id(self, order_id: str) -> dict[str, Any] | None:
         if not self.enabled:
             raise ShopifyNotConfigured("Shopify credentials not set in .env")
         async with httpx.AsyncClient(timeout=15) as client:
@@ -104,8 +124,12 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json().get("order")
 
-    @retry(retry=retry_if_exception(_is_transient_shopify_error), before_sleep=_log_retry_attempt, **_EXP_BACKOFF)
-    async def get_shop_policies(self) -> Dict[str, str]:
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_shop_policies(self) -> dict[str, str]:
         """Shopify's legacy policies.json endpoint — Settings > Policies content."""
         if not self.enabled:
             raise ShopifyNotConfigured("Shopify credentials not set in .env")
@@ -115,8 +139,12 @@ class ShopifyClient:
             policies = resp.json().get("policies", [])
             return {p["title"]: p.get("body", "") for p in policies if p.get("body")}
 
-    @retry(retry=retry_if_exception(_is_transient_shopify_error), before_sleep=_log_retry_attempt, **_EXP_BACKOFF)
-    async def get_products(self, limit: int = 50) -> List[Dict[str, Any]]:
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_products(self, limit: int = 50) -> list[dict[str, Any]]:
         if not self.enabled:
             raise ShopifyNotConfigured("Shopify credentials not set in .env")
         async with httpx.AsyncClient(timeout=15) as client:
@@ -128,10 +156,14 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json().get("products", [])
 
-    @retry(retry=retry_if_exception(_is_timeout_or_connection_error), before_sleep=_log_retry_attempt, **_EXP_BACKOFF)
+    @retry(
+        retry=retry_if_exception(_is_timeout_or_connection_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
     async def create_refund(
         self, order_id: str, amount: float, reason: str = "", notify_customer: bool = True
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """Creates a monetary refund on an order. ALWAYS call this only after explicit human
         approval — see api/customer_support.py POST /tickets/{id}/actions/refund. This method
         itself does not gate on anything; the safety gate lives at the API layer."""
@@ -167,13 +199,19 @@ class ShopifyClient:
                 }
             }
             resp = await client.post(
-                f"{self.base_url}/orders/{order_id}/refunds.json", headers=self.headers, json=payload
+                f"{self.base_url}/orders/{order_id}/refunds.json",
+                headers=self.headers,
+                json=payload,
             )
             resp.raise_for_status()
             return resp.json()
 
-    @retry(retry=retry_if_exception(_is_timeout_or_connection_error), before_sleep=_log_retry_attempt, **_EXP_BACKOFF)
-    async def create_reorder(self, order_id: str, notify_customer: bool = True) -> Dict[str, Any]:
+    @retry(
+        retry=retry_if_exception(_is_timeout_or_connection_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def create_reorder(self, order_id: str, notify_customer: bool = True) -> dict[str, Any]:
         """Creates a new draft order with the same line items as the original, then completes it.
         This is the 'resend' action — used when a customer didn't receive their order and
         a replacement needs to be shipped. ALWAYS call this only after explicit human approval —
@@ -196,16 +234,20 @@ class ShopifyClient:
                 if li.get("variant_id")
             ]
             if not line_items:
-                raise ValueError(f"Order {order_id} has no line items with variant IDs — cannot reorder")
+                raise ValueError(
+                    f"Order {order_id} has no line items with variant IDs — cannot reorder"
+                )
 
             draft_payload = {
                 "draft_order": {
                     "line_items": line_items,
                     "note": f"Resend of original order {original_order.get('name', order_id)} — "
-                            f"created by AI support agent (human-approved)",
+                    f"created by AI support agent (human-approved)",
                     "shipping_address": original_order.get("shipping_address"),
                     "email": original_order.get("email"),
-                    "customer": {"id": original_order["customer"]["id"]} if original_order.get("customer") else None,
+                    "customer": {"id": original_order["customer"]["id"]}
+                    if original_order.get("customer")
+                    else None,
                 }
             }
             draft_resp = await client.post(
@@ -230,7 +272,11 @@ class ShopifyClient:
                         headers=self.headers,
                     )
                 except Exception:
-                    logger.warning("resend_order_receipt_failed", order_id=order_id, new_order_id=new_order["id"])
+                    logger.warning(
+                        "resend_order_receipt_failed",
+                        order_id=order_id,
+                        new_order_id=new_order["id"],
+                    )
 
             return {
                 "new_order_id": new_order["id"],
@@ -240,17 +286,17 @@ class ShopifyClient:
             }
 
     @staticmethod
-    def summarize_order(order: Dict[str, Any]) -> str:
+    def summarize_order(order: dict[str, Any]) -> str:
         """Turn a raw Shopify order object into a short, LLM-friendly summary."""
         fulfillment_status = order.get("fulfillment_status") or "unfulfilled"
         financial_status = order.get("financial_status", "unknown")
-        items = ", ".join(
-            f"{li['quantity']}x {li['title']}" for li in order.get("line_items", [])
-        )
+        items = ", ".join(f"{li['quantity']}x {li['title']}" for li in order.get("line_items", []))
         tracking = ""
         for f in order.get("fulfillments", []) or []:
             if f.get("tracking_number"):
-                tracking = f" | Tracking: {f['tracking_number']} ({f.get('tracking_company', 'carrier')})"
+                tracking = (
+                    f" | Tracking: {f['tracking_number']} ({f.get('tracking_company', 'carrier')})"
+                )
                 break
 
         return (
