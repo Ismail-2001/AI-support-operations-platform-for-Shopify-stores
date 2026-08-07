@@ -65,58 +65,58 @@ export function KnowledgeBasePage({ connection }: { connection: Connection }) {
   return (
     <div className="max-w-3xl">
       <header className="mb-6">
-        <p className="font-mono text-[11px] tracking-[0.18em] uppercase text-ink-400 mb-1">Grounding</p>
-        <h1 className="font-display text-3xl text-ink-900">Knowledge base</h1>
+        <p className="font-mono text-[11px] tracking-[0.18em] uppercase text-ink-400 dark:text-ink-dark-400 mb-1">Grounding</p>
+        <h1 className="font-display text-3xl text-ink-900 dark:text-ink-dark-900">Knowledge base</h1>
       </header>
 
-      <div className="bg-surface border border-line rounded-xl2 shadow-panel p-5 mb-6 flex items-center justify-between">
+      <div className="bg-surface dark:bg-surface-dark border border-line dark:border-line-dark rounded-xl2 shadow-panel p-5 mb-6 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <BookOpen className="w-5 h-5 text-teal" />
           <div>
-            <p className="text-sm font-medium text-ink-900">{chunkCount ?? "–"} chunks indexed</p>
-            <p className="text-xs text-ink-400">Policies, FAQs, and product descriptions the agent can cite.</p>
+            <p className="text-sm font-medium text-ink-900 dark:text-ink-dark-900">{chunkCount ?? "–"} chunks indexed</p>
+            <p className="text-xs text-ink-400 dark:text-ink-dark-400">Policies, FAQs, and product descriptions the agent can cite.</p>
           </div>
         </div>
         <button
           onClick={handleSync}
           disabled={syncing}
-          className="flex items-center gap-1.5 text-xs bg-ink-900 text-white rounded-lg px-3.5 py-2 font-medium hover:bg-ink-700 disabled:opacity-40 transition-colors"
+          className="flex items-center gap-1.5 text-xs bg-ink-900 dark:bg-white text-white dark:text-ink-900 rounded-lg px-3.5 py-2 font-medium hover:bg-ink-700 dark:hover:bg-ink-dark-900 disabled:opacity-40 transition-colors"
         >
           <Sparkles className="w-3.5 h-3.5" /> {syncing ? "Syncing…" : "Sync from Shopify"}
         </button>
       </div>
       {syncError && (
-        <div className="rounded-xl2 bg-rose-100 text-rose-700 text-sm px-4 py-3 mb-6 flex items-start gap-2.5">
+        <div className="rounded-xl2 bg-rose-100 dark:bg-rose/20 text-rose-700 dark:text-rose text-sm px-4 py-3 mb-6 flex items-start gap-2.5">
           <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
           <div className="flex-1">
             <p>{syncMessage}</p>
-            <button onClick={handleSync} className="mt-2 text-xs font-medium underline hover:text-rose-900 transition-colors">
+            <button onClick={handleSync} className="mt-2 text-xs font-medium underline hover:text-rose-900 dark:hover:text-rose transition-colors">
               Try again
             </button>
           </div>
         </div>
       )}
-      {!syncError && syncMessage && <p className="text-xs text-ink-600 -mt-4 mb-6">{syncMessage}</p>}
+      {!syncError && syncMessage && <p className="text-xs text-ink-600 dark:text-ink-dark-600 -mt-4 mb-6">{syncMessage}</p>}
 
       <section className="mb-8">
-        <h2 className="font-display text-lg text-ink-900 mb-3">Add content manually</h2>
-        <form onSubmit={handleIngest} className="bg-surface border border-line rounded-xl2 shadow-panel p-5 space-y-3">
+        <h2 className="font-display text-lg text-ink-900 dark:text-ink-dark-900 mb-3">Add content manually</h2>
+        <form onSubmit={handleIngest} className="bg-surface dark:bg-surface-dark border border-line dark:border-line-dark rounded-xl2 shadow-panel p-5 space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-[11px] font-medium text-ink-600 mb-1">Source id</label>
+              <label className="block text-[11px] font-medium text-ink-600 dark:text-ink-dark-600 mb-1">Source id</label>
               <input value={source} onChange={(e) => setSource(e.target.value)} placeholder="faq:sizing"
-                className="w-full rounded-lg border border-line bg-bg px-2.5 py-2 text-sm font-mono outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" required />
+                className="w-full rounded-lg border border-line dark:border-line-dark bg-bg dark:bg-bg-dark px-2.5 py-2 text-sm font-mono text-ink-900 dark:text-ink-dark-900 placeholder:text-ink-400 dark:placeholder:text-ink-dark-400 outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" required />
             </div>
             <div>
-              <label className="block text-[11px] font-medium text-ink-600 mb-1">Title</label>
+              <label className="block text-[11px] font-medium text-ink-600 dark:text-ink-dark-600 mb-1">Title</label>
               <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Sizing guide"
-                className="w-full rounded-lg border border-line bg-bg px-2.5 py-2 text-sm outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" required />
+                className="w-full rounded-lg border border-line dark:border-line-dark bg-bg dark:bg-bg-dark px-2.5 py-2 text-sm text-ink-900 dark:text-ink-dark-900 placeholder:text-ink-400 dark:placeholder:text-ink-dark-400 outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" required />
             </div>
           </div>
           <div>
-            <label className="block text-[11px] font-medium text-ink-600 mb-1">Content</label>
+            <label className="block text-[11px] font-medium text-ink-600 dark:text-ink-dark-600 mb-1">Content</label>
             <textarea value={content} onChange={(e) => setContent(e.target.value)} rows={4}
-              className="w-full rounded-lg border border-line bg-bg px-2.5 py-2 text-sm outline-none focus:border-teal focus:ring-2 focus:ring-teal/20 resize-none" required />
+              className="w-full rounded-lg border border-line dark:border-line-dark bg-bg dark:bg-bg-dark px-2.5 py-2 text-sm text-ink-900 dark:text-ink-dark-900 placeholder:text-ink-400 dark:placeholder:text-ink-dark-400 outline-none focus:border-teal focus:ring-2 focus:ring-teal/20 resize-none" required />
           </div>
           <button type="submit" disabled={ingesting}
             className="flex items-center gap-1.5 text-xs bg-teal text-white rounded-lg px-3.5 py-2 font-medium hover:bg-teal-700 disabled:opacity-40 transition-colors">
@@ -126,25 +126,25 @@ export function KnowledgeBasePage({ connection }: { connection: Connection }) {
       </section>
 
       <section>
-        <h2 className="font-display text-lg text-ink-900 mb-3">Test retrieval</h2>
+        <h2 className="font-display text-lg text-ink-900 dark:text-ink-dark-900 mb-3">Test retrieval</h2>
         <form onSubmit={handleSearch} className="flex gap-2 mb-4">
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Is the hoodie waterproof?"
-            className="flex-1 rounded-lg border border-line bg-surface px-3 py-2.5 text-sm outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" />
+            className="flex-1 rounded-lg border border-line dark:border-line-dark bg-surface dark:bg-surface-dark px-3 py-2.5 text-sm text-ink-900 dark:text-ink-dark-900 placeholder:text-ink-400 dark:placeholder:text-ink-dark-400 outline-none focus:border-teal focus:ring-2 focus:ring-teal/20" />
           <button type="submit" disabled={searching}
-            className="flex items-center gap-1.5 text-xs bg-ink-900 text-white rounded-lg px-4 py-2.5 font-medium hover:bg-ink-700 disabled:opacity-40 transition-colors">
+            className="flex items-center gap-1.5 text-xs bg-ink-900 dark:bg-white text-white dark:text-ink-900 rounded-lg px-4 py-2.5 font-medium hover:bg-ink-700 dark:hover:bg-ink-dark-900 disabled:opacity-40 transition-colors">
             <Search className="w-3.5 h-3.5" /> Search
           </button>
         </form>
         {results && (
           <div className="space-y-2">
-            {results.length === 0 && <p className="text-sm text-ink-400">No matches above the similarity threshold.</p>}
+            {results.length === 0 && <p className="text-sm text-ink-400 dark:text-ink-dark-400">No matches above the similarity threshold.</p>}
             {results.map((r, i) => (
-              <div key={i} className="bg-surface border border-line rounded-xl2 p-4">
+              <div key={i} className="bg-surface dark:bg-surface-dark border border-line dark:border-line-dark rounded-xl2 p-4">
                 <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium text-ink-900">{r.title}</span>
-                  <span className="font-mono text-[11px] text-teal-700">{Math.round(r.score * 100)}% match</span>
+                  <span className="text-sm font-medium text-ink-900 dark:text-ink-dark-900">{r.title}</span>
+                  <span className="font-mono text-[11px] text-teal-700 dark:text-teal">{Math.round(r.score * 100)}% match</span>
                 </div>
-                <p className="text-xs text-ink-600 leading-relaxed">{r.content}</p>
+                <p className="text-xs text-ink-600 dark:text-ink-dark-600 leading-relaxed">{r.content}</p>
               </div>
             ))}
           </div>

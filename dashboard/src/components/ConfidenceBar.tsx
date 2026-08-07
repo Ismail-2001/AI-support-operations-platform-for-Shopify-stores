@@ -20,16 +20,16 @@ export function ConfidenceBar({
 
   return (
     <div className="flex items-center gap-2.5 min-w-0">
-      <div className={`relative flex-1 min-w-[64px] rounded-full bg-ink-900/[0.06] ${trackHeight}`}>
+      <div className={`relative flex-1 min-w-[64px] rounded-full bg-ink-900/[0.06] dark:bg-white/[0.06] ${trackHeight}`}>
         <div
           className={`absolute inset-y-0 left-0 rounded-full ${color} transition-[width] duration-500 ease-out`}
           style={{ width: `${pct}%` }}
         />
         {/* calibration tick at the auto-send threshold, a quiet reference mark */}
-        <div className="absolute inset-y-0 left-[85%] w-px bg-ink-900/20" />
+        <div className="absolute inset-y-0 left-[85%] w-px bg-ink-900/20 dark:bg-white/20" />
       </div>
       {showLabel && (
-        <span className="font-mono text-xs tabular-nums text-ink-600 shrink-0 w-9 text-right">{pct}%</span>
+        <span className="font-mono text-xs tabular-nums text-ink-600 dark:text-ink-dark-600 shrink-0 w-9 text-right">{pct}%</span>
       )}
     </div>
   );

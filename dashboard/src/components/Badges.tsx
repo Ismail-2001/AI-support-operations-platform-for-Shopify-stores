@@ -2,11 +2,11 @@ import type { TicketCategory, TicketPriority, Sentiment, MessageSender } from ".
 
 function Chip({ children, tone }: { children: React.ReactNode; tone: "gold" | "teal" | "rose" | "violet" | "neutral" }) {
   const tones: Record<string, string> = {
-    gold: "bg-gold-100 text-gold-700",
-    teal: "bg-teal-100 text-teal-700",
-    rose: "bg-rose-100 text-rose-700",
-    violet: "bg-violet-100 text-violet-700",
-    neutral: "bg-ink-900/[0.05] text-ink-600",
+    gold: "bg-gold-100 text-gold-700 dark:bg-gold/20 dark:text-gold",
+    teal: "bg-teal-100 text-teal-700 dark:bg-teal/20 dark:text-teal",
+    rose: "bg-rose-100 text-rose-700 dark:bg-rose/20 dark:text-rose",
+    violet: "bg-violet-100 text-violet-700 dark:bg-violet/20 dark:text-violet",
+    neutral: "bg-ink-900/[0.05] text-ink-600 dark:bg-white/[0.05] dark:text-ink-dark-600",
   };
   return (
     <span className={`inline-flex items-center px-2 py-0.5 rounded-md text-xs font-medium tracking-wide ${tones[tone]}`}>

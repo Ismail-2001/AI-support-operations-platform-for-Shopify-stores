@@ -7,6 +7,10 @@
   scrollbar-color: #c3ccd6 transparent;
 }
 
+.dark * {
+  scrollbar-color: #3a4f63 transparent;
+}
+
 :focus-visible {
   outline: 2px solid #2e8c82;
   outline-offset: 2px;
@@ -23,4 +27,12 @@
 
 body {
   font-feature-settings: "cv02", "cv03", "cv04";
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+.dark body {
+  background-color: #0F171E;
 }
