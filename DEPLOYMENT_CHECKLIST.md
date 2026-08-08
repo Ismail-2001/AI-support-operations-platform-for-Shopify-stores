@@ -27,6 +27,7 @@ The Blueprint will pre-fill all vars from `render.yaml`. **Every var marked `syn
 |----------|-----------------|
 | `TENANT_NAME` | Your label for this deployment (e.g., `acme-corp-support`) |
 | `OPENROUTER_API_KEY` | https://openrouter.ai/keys (create key, copy) |
+| `GOOGLE_API_KEY` | https://aistudio.google.com/apikey — **REQUIRED for Knowledge Base / RAG search**, even if you use Groq/OpenRouter for chat |
 | `ANTHROPIC_API_KEY` | https://console.anthropic.com/ (optional, fallback) |
 | `SHOPIFY_SHOP_DOMAIN` | Your store admin URL → `your-store.myshopify.com` |
 | `SHOPIFY_ACCESS_TOKEN` | Shopify Admin → Settings → Apps and sales channels → Develop apps → Create app → `read_orders` scope → Install → Admin API access token |

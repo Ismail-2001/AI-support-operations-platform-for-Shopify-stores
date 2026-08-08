@@ -95,18 +95,23 @@ class KnowledgeBase:
 
     async def ingest(self, source: str, title: str, content: str) -> int:
         """Chunks + embeds + stores a document. Returns number of chunks created."""
-        chunks = _chunk_text(content)
-        async with aiosqlite.connect(self.db_path) as db:
-            for chunk in chunks:
-                vector = await embed_text(chunk)
-                await db.execute(
-                    "INSERT INTO kb_chunks (source, title, content, embedding, created_at) "
-                    "VALUES (?, ?, ?, ?, datetime('now'))",
-                    (source, title, chunk, json.dumps(vector)),
-                )
-            await db.commit()
-        logger.info("kb_ingested", source=source, title=title, chunks=len(chunks))
-        return len(chunks)
+        try:
+            chunks = _chunk_text(content)
+            async with aiosqlite.connect(self.db_path) as db:
+                for chunk in chunks:
+                    vector = await embed_text(chunk)
+                    await db.execute(
+                        "INSERT INTO kb_chunks (source, title, content, embedding, created_at) "
+                        "VALUES (?, ?, ?, ?, datetime('now'))",
+                        (source, title, chunk, json.dumps(vector)),
+                    )
+                await db.commit()
+            logger.info("kb_ingested", source=source, title=title, chunks=len(chunks))
+            return len(chunks)
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Knowledge base requires GOOGLE_API_KEY to be configured: {e}"
+            ) from e
 
     async def delete_source(self, source: str) -> None:
         """Re-ingesting a policy page should replace the old chunks, not duplicate them."""
@@ -117,40 +122,45 @@ class KnowledgeBase:
     async def search(
         self, query: str, top_k: int = 3, min_score: float = 0.55
     ) -> list[KnowledgeChunk]:
-        async with aiosqlite.connect(self.db_path) as db:
-            db.row_factory = aiosqlite.Row
-            cursor = await db.execute("SELECT * FROM kb_chunks")
-            rows = await cursor.fetchall()
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                db.row_factory = aiosqlite.Row
+                cursor = await db.execute("SELECT * FROM kb_chunks")
+                rows = await cursor.fetchall()
 
-        if not rows:
-            return []
+            if not rows:
+                return []
 
-        query_vector = np.array(await embed_text(query))
-        query_norm = np.linalg.norm(query_vector)
-        if query_norm == 0:
-            return []
+            query_vector = np.array(await embed_text(query))
+            query_norm = np.linalg.norm(query_vector)
+            if query_norm == 0:
+                return []
 
-        scored = []
-        for row in rows:
-            doc_vector = np.array(json.loads(row["embedding"]))
-            doc_norm = np.linalg.norm(doc_vector)
-            if doc_norm == 0:
-                continue
-            similarity = float(np.dot(query_vector, doc_vector) / (query_norm * doc_norm))
-            if similarity >= min_score:
-                scored.append((similarity, row))
+            scored = []
+            for row in rows:
+                doc_vector = np.array(json.loads(row["embedding"]))
+                doc_norm = np.linalg.norm(doc_vector)
+                if doc_norm == 0:
+                    continue
+                similarity = float(np.dot(query_vector, doc_vector) / (query_norm * doc_norm))
+                if similarity >= min_score:
+                    scored.append((similarity, row))
 
-        scored.sort(key=lambda x: x[0], reverse=True)
-        return [
-            KnowledgeChunk(
-                id=row["id"],
-                source=row["source"],
-                title=row["title"],
-                content=row["content"],
-                score=score,
-            )
-            for score, row in scored[:top_k]
-        ]
+            scored.sort(key=lambda x: x[0], reverse=True)
+            return [
+                KnowledgeChunk(
+                    id=row["id"],
+                    source=row["source"],
+                    title=row["title"],
+                    content=row["content"],
+                    score=score,
+                )
+                for score, row in scored[:top_k]
+            ]
+        except RuntimeError as e:
+            raise RuntimeError(
+                f"Knowledge base requires GOOGLE_API_KEY to be configured: {e}"
+            ) from e
 
     async def count(self) -> int:
         async with aiosqlite.connect(self.db_path) as db:

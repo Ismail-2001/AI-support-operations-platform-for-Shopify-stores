@@ -1,6 +1,6 @@
 """
 LLM client factory and retry-with-fallback wrapper.
-Primary resolved by get_llm() priority: Groq > Google Gemini > OpenRouter.
+Primary resolved by get_llm() priority: OpenRouter > Groq > Google Gemini.
 Fallback: Claude Haiku (configurable, set ANTHROPIC_API_KEY).
 Adding a new provider only requires extending invoke_with_fallback's
 chain-of-responsibility — the call sites stay the same.
@@ -47,6 +47,22 @@ def _log_llm_retry(retry_state) -> None:
 
 
 def get_llm(temperature: float = 0.0) -> BaseChatModel:
+    # Whenever the provider actually running in production changes, re-run
+    # `python -m evals.run_evals` and do not trust the old 15/15 result for
+    # the new provider — different models have different confidence
+    # calibration and prompt-injection resistance.
+    if settings.OPENROUTER_API_KEY:
+        return ChatOpenAI(
+            model=settings.OPENROUTER_MODEL,
+            api_key=settings.OPENROUTER_API_KEY.get_secret_value(),
+            temperature=temperature,
+            timeout=30,
+            base_url="https://openrouter.ai/api/v1",
+            default_headers={
+                "HTTP-Referer": "https://github.com/anomalyco/cs-agent",
+                "X-Title": "CS-Agent",
+            },
+        )
     if settings.GROQ_API_KEY:
         return ChatGroq(
             model=settings.GROQ_MODEL,
@@ -61,20 +77,8 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
             temperature=temperature,
             timeout=30,
         )
-    if settings.OPENROUTER_API_KEY:
-        return ChatOpenAI(
-            model=settings.OPENROUTER_MODEL,
-            api_key=settings.OPENROUTER_API_KEY.get_secret_value(),
-            temperature=temperature,
-            timeout=30,
-            base_url="https://openrouter.ai/api/v1",
-            default_headers={
-                "HTTP-Referer": "https://github.com/anomalyco/cs-agent",
-                "X-Title": "CS-Agent",
-            },
-        )
     raise RuntimeError(
-        "No LLM API key configured. Set GROQ_API_KEY, GOOGLE_API_KEY, or OPENROUTER_API_KEY "
+        "No LLM API key configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GOOGLE_API_KEY "
         "in your .env file."
     )
 

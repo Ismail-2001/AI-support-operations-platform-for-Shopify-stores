@@ -56,22 +56,40 @@ async def lifespan(app: FastAPI):
             message="REQUIRE_API_KEY is true but API_KEY is unset — every protected "
             "request will fail with a clear 500 until you set API_KEY in .env.",
         )
+    if not settings.GOOGLE_API_KEY:
+        logger.warning(
+            "startup_warning_no_google_key",
+            message="GOOGLE_API_KEY is not set — Knowledge Base search will not work "
+            "until it's configured, even if you're using Groq/OpenRouter for chat. "
+            "Embeddings currently require Google's text-embedding-004 regardless of "
+            "your chat provider.",
+        )
     await store.init()
     await knowledge_base.init()
     logger.info("cs_agent_started", tenant_name=settings.TENANT_NAME)
 
     # Signal handlers only work on Unix; on Windows, SIGTERM is not supported
     # by add_signal_handler. Uvicorn handles SIGINT natively anyway.
+    # When running under TestClient (e.g. pytest), we may not be in the main
+    # thread — add_signal_handler raises RuntimeError in that case.  Log and
+    # skip graceful-shutdown rather than crashing the entire app.
     if sys.platform != "win32":
         shutdown_event = asyncio.Event()
         loop = asyncio.get_running_loop()
         import signal
 
-        for sig in (signal.SIGTERM, signal.SIGINT):
-            loop.add_signal_handler(sig, shutdown_event.set)
-        await shutdown_event.wait()
-        logger.info("shutdown_initiated", tenant_name=settings.TENANT_NAME)
-        await asyncio.sleep(5)
+        try:
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                loop.add_signal_handler(sig, shutdown_event.set)
+        except RuntimeError:
+            logger.debug(
+                "signal_handler_skipped",
+                reason="not in main thread — graceful shutdown via SIGTERM disabled",
+            )
+        else:
+            await shutdown_event.wait()
+            logger.info("shutdown_initiated", tenant_name=settings.TENANT_NAME)
+            await asyncio.sleep(5)
 
     yield
 

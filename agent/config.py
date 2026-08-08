@@ -14,13 +14,14 @@ class Settings(BaseSettings):
     TENANT_NAME: str
 
     # --- LLM ---
-    # Provider priority: GROQ_API_KEY > GOOGLE_API_KEY > OPENROUTER_API_KEY
+    # Provider priority: OPENROUTER_API_KEY > GROQ_API_KEY > GOOGLE_API_KEY
+    # OpenRouter is the eval-validated primary. Re-run evals if you change this.
+    OPENROUTER_API_KEY: SecretStr | None = None
+    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
     GROQ_API_KEY: SecretStr | None = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     GOOGLE_API_KEY: SecretStr | None = None
     GEMINI_MODEL: str = "gemini-2.0-flash"
-    OPENROUTER_API_KEY: SecretStr | None = None
-    OPENROUTER_MODEL: str = "openai/gpt-4o-mini"
     ANTHROPIC_API_KEY: SecretStr | None = None
     FALLBACK_MODEL: str = "claude-haiku-4-5-20251001"
 

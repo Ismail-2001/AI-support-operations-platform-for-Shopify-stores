@@ -8,7 +8,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.3-1C3C3C?logo=langchain)](https://langchain-ai.github.io/langgraph/)
-[![Groq](https://img.shields.io/badge/Groq-llama--3.3--70b-F55036?logo=groq)](https://groq.com/)
+[![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
 [![Tests](https://img.shields.io/badge/Tests-168%2B%20Python%20%7C%2060%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
@@ -254,8 +254,9 @@ sequenceDiagram
 | **Runtime** | Python 3.12+ | Core application language |
 | **API Framework** | FastAPI 0.115 | Async REST + webhook endpoints |
 | **LLM Orchestration** | LangGraph 0.3 | State machine for agent pipeline |
-| **LLM Provider** | Groq (llama-3.3-70b) | Primary: fast, cheap, high-quality |
-| **LLM Fallback** | Claude Haiku / Gemini | Automatic failover chain |
+| **LLM Provider** | OpenRouter (gpt-4o-mini) | Primary: eval-validated, reliable |
+| **LLM Alternative** | Groq (llama-3.3-70b) | Fast, cheap, not eval-validated |
+| **LLM Fallback** | Claude Haiku | Automatic failover chain |
 | **Database** | SQLite + WAL mode | Tickets, KB vectors, traces, costs |
 | **Vector Search** | NumPy + SQLite | Local cosine similarity (zero infra) |
 | **Embeddings** | Google Gemini | text-embedding-004 (free tier) |
@@ -274,7 +275,8 @@ sequenceDiagram
 
 - Python 3.12+
 - Node.js 18+ (for dashboard)
-- A [Groq API key](https://console.groq.com/keys) (free tier available)
+- An [OpenRouter API key](https://openrouter.ai/keys) (eval-validated primary provider)
+- A [Google API key](https://aistudio.google.com/apikey) (required for Knowledge Base / RAG)
 - A [Shopify store](https://shopify.com) with a custom app that has `read_orders` scope
 - A [Gorgias account](https://gorgias.com) with REST API key
 
@@ -290,8 +292,9 @@ Fill in `.env` with your keys:
 
 ```bash
 TENANT_NAME=my-store
-GROQ_API_KEY=gsk_your_groq_key_here
-GROQ_MODEL=llama-3.3-70b-versatile
+OPENROUTER_API_KEY=sk-or-your-key-here
+OPENROUTER_MODEL=openai/gpt-4o-mini
+GOOGLE_API_KEY=your-google-api-key
 
 SHOPIFY_SHOP_DOMAIN=my-store.myshopify.com
 SHOPIFY_ACCESS_TOKEN=shpat_your_token_here
@@ -359,8 +362,11 @@ Dashboard: **http://localhost:5173**
 | Variable | Required | Description |
 |---|---|---|
 | `TENANT_NAME` | Yes | Deployment label (one per client) |
-| `GROQ_API_KEY` | Yes* | Primary LLM provider key |
+| `OPENROUTER_API_KEY` | Yes* | Primary LLM provider key (eval-validated) |
+| `OPENROUTER_MODEL` | No | Default: `openai/gpt-4o-mini` |
+| `GROQ_API_KEY` | Yes* | Alternative LLM provider (not eval-validated) |
 | `GROQ_MODEL` | No | Default: `llama-3.3-70b-versatile` |
+| `GOOGLE_API_KEY` | Yes | **Required for Knowledge Base / RAG** — embeddings use Google's text-embedding-004 regardless of chat provider |
 | `SHOPIFY_SHOP_DOMAIN` | Yes | Your Shopify store domain |
 | `SHOPIFY_ACCESS_TOKEN` | Yes | Admin API token (read_orders scope) |
 | `GORGIAS_DOMAIN` | Yes | Gorgias subdomain |
@@ -668,8 +674,6 @@ cd dashboard && npm run dev                 # Dashboard
 
 | Feature | Priority | Status |
 |---|---|---|
-| Circuit breakers for Shopify/Gorgias | Critical | Done |
-| Conversation windowing (token budget) | Critical | Done |
 | LLM output parsing fallback | Critical | Done |
 | SQLite WAL mode + schema versioning | Critical | Done |
 | Structured error responses | High | Done |
@@ -677,6 +681,8 @@ cd dashboard && npm run dev                 # Dashboard
 | Webhook body size limits | High | Done |
 | Pydantic V2 migration | High | Done |
 | Frontend test infrastructure | High | Done |
+| Circuit breakers for Shopify/Gorgias | Critical | Planned |
+| Conversation windowing (token budget) | Critical | Planned |
 | Dead-letter queue + Slack alerts | High | Planned |
 | Async webhook processing | High | Planned |
 | PostgreSQL migration path | Medium | Planned |
