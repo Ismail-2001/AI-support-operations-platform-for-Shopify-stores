@@ -152,7 +152,7 @@ def get_embeddings_client() -> GoogleGenerativeAIEmbeddings:
         raise RuntimeError("GOOGLE_API_KEY is not set. Add it to your .env file.")
     if _embeddings_client is None:
         _embeddings_client = GoogleGenerativeAIEmbeddings(
-            model="models/text-embedding-004",
+            model="models/gemini-embedding-001",
             google_api_key=settings.GOOGLE_API_KEY.get_secret_value(),
         )
     return _embeddings_client
