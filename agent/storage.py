@@ -112,6 +112,11 @@ CREATE TABLE IF NOT EXISTS llm_costs (
 );
 
 CREATE INDEX IF NOT EXISTS idx_llm_costs_date ON llm_costs(date);
+
+CREATE TABLE IF NOT EXISTS app_settings (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 """
 
 

@@ -44,6 +44,11 @@ class CustomerSupportAgent:
         await store.add_message(ticket.id, MessageSender.CUSTOMER.value, ticket.body)
         return await self._process(ticket)
 
+    async def dry_run(self, ticket: SupportTicket) -> AgentDecision:
+        """Run the full pipeline WITHOUT persisting a ticket — used by the setup
+        wizard's test step so a trial question never becomes a real ticket."""
+        return await self._process(ticket, dry_run=True)
+
     async def handle_followup(self, ticket_id: str, message_body: str) -> AgentDecision | None:
         """Entry point for a new customer message on an EXISTING ticket (thread continues)."""
         ticket = await store.get_ticket_model(ticket_id)
@@ -52,7 +57,7 @@ class CustomerSupportAgent:
         await store.add_message(ticket_id, MessageSender.CUSTOMER.value, message_body)
         return await self._process(ticket)
 
-    async def _process(self, ticket: SupportTicket) -> AgentDecision:
+    async def _process(self, ticket: SupportTicket, dry_run: bool = False) -> AgentDecision:
         final_state = await self.graph.ainvoke(
             {
                 "ticket": ticket,
@@ -65,6 +70,7 @@ class CustomerSupportAgent:
                 "kb_used": False,
                 "suggestion": None,
                 "auto_sent": False,
+                "dry_run": dry_run,
             }
         )
 

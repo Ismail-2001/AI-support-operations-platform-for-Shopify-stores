@@ -1,6 +1,7 @@
 import type {
-  CalibrationReport, CostReport, KnowledgeBaseStatus, QualityStats,
-  SupportAnalytics, TicketMessage, TicketWithSuggestion, TraceEntry,
+  BrandVoice, CalibrationReport, CostReport, KnowledgeBaseStatus, QualityStats,
+  SetupShopifyResult, SetupStatus, SetupTestResult, SupportAnalytics, TicketMessage,
+  TicketWithSuggestion, TraceEntry,
 } from "./types";
 
 export class ApiError extends Error {
@@ -90,4 +91,24 @@ export const api = {
     request<{ query: string; results: { source: string; title: string; content: string; score: number }[] }>(
       conn, "/support/knowledge-base/search", { method: "POST", body: JSON.stringify({ query, top_k: 5 }) }
     ),
+
+  setupStatus: (conn: Connection) => request<SetupStatus>(conn, "/support/setup"),
+
+  setupShopify: (conn: Connection, shopDomain: string, accessToken: string) =>
+    request<SetupShopifyResult>(conn, "/support/setup/shopify", {
+      method: "POST",
+      body: JSON.stringify({ shop_domain: shopDomain, access_token: accessToken }),
+    }),
+
+  setupVoice: (conn: Connection, voice: BrandVoice) =>
+    request<{ voice: BrandVoice }>(conn, "/support/setup/voice", {
+      method: "PUT",
+      body: JSON.stringify(voice),
+    }),
+
+  setupTest: (conn: Connection, question: string) =>
+    request<SetupTestResult>(conn, "/support/setup/test", {
+      method: "POST",
+      body: JSON.stringify({ question }),
+    }),
 };

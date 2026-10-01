@@ -22,6 +22,7 @@ from api.customer_support import public_router, webhook_router
 from api.customer_support import router as support_router
 from api.errors import APIError
 from api.middleware import RequestIDMiddleware, RequestLoggingMiddleware, WebhookBodyLimitMiddleware
+from api.setup import router as setup_router
 
 structlog.configure(
     processors=[
@@ -61,7 +62,7 @@ async def lifespan(app: FastAPI):
             "startup_warning_no_google_key",
             message="GOOGLE_API_KEY is not set — Knowledge Base search will not work "
             "until it's configured, even if you're using Groq/OpenRouter for chat. "
-            "Embeddings currently require Google's text-embedding-004 regardless of "
+            "Embeddings require Google's gemini-embedding-001 regardless of "
             "your chat provider.",
         )
     await store.init()
@@ -118,11 +119,12 @@ if _allowed_origins:
         CORSMiddleware,
         allow_origins=_allowed_origins,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH"],
+        allow_methods=["GET", "POST", "PATCH", "PUT"],
         allow_headers=["X-API-Key", "Content-Type", "Idempotency-Key", "X-Webhook-Secret"],
     )
 
 app.include_router(support_router)
+app.include_router(setup_router)
 app.include_router(webhook_router)
 app.include_router(public_router)
 

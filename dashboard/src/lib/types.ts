@@ -107,3 +107,40 @@ export interface TraceEntry {
 export interface KnowledgeBaseStatus {
   chunk_count: number;
 }
+
+export interface BrandVoice {
+  store_name: string;
+  tone: "friendly" | "professional" | "casual";
+  sign_off: string;
+  support_email: string;
+}
+
+export interface SetupStatus {
+  shopify: { connected: boolean; domain: string | null };
+  knowledge_base: { chunk_count: number };
+  voice: BrandVoice;
+  voice_set: boolean;
+  google_key_set: boolean;
+  test_done: boolean;
+  steps: { shopify: boolean; policies: boolean; voice: boolean; test: boolean };
+  setup_complete: boolean;
+}
+
+export interface SetupShopifyResult {
+  connected: boolean;
+  domain: string;
+  shop_name: string | null;
+  shop_email: string | null;
+  currency: string | null;
+}
+
+export interface SetupTestResult {
+  classification: {
+    category: string;
+    priority: string;
+    sentiment: string;
+    reasoning: string;
+  };
+  suggestion: ResponseSuggestion;
+  order_context_used: boolean;
+}

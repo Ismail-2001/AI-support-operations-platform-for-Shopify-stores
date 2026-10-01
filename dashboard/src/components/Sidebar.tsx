@@ -1,7 +1,7 @@
-import { Inbox, BarChart3, BookOpen, Radio, LogOut, Sun, Moon, Settings } from "lucide-react";
+import { Inbox, BarChart3, BookOpen, Radio, LogOut, Sun, Moon, Settings, Wand2 } from "lucide-react";
 import { useTheme } from "../lib/ThemeProvider";
 
-export type View = "tickets" | "analytics" | "knowledge-base" | "settings";
+export type View = "tickets" | "analytics" | "knowledge-base" | "settings" | "setup";
 
 export function Sidebar({
   view, onNavigate, onDisconnect, health,
@@ -18,6 +18,7 @@ export function Sidebar({
     { id: "tickets", label: "Tickets", icon: Inbox },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
     { id: "knowledge-base", label: "Knowledge base", icon: BookOpen },
+    { id: "setup", label: "Setup", icon: Wand2 },
     { id: "settings", label: "Settings", icon: Settings },
   ];
 

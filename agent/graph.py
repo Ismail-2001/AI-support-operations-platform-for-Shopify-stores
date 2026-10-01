@@ -51,6 +51,7 @@ class AgentState(TypedDict):
     kb_used: bool
     suggestion: ResponseSuggestion | None
     auto_sent: bool
+    dry_run: bool
 
 
 def build_agent_graph(classifier, response_engine, shopify):
@@ -200,6 +201,17 @@ def build_agent_graph(classifier, response_engine, shopify):
         ticket.category = classification.category
         ticket.priority = classification.priority
         ticket.sentiment = classification.sentiment
+
+        # Setup-wizard previews run the exact same pipeline but must not leave
+        # a fake ticket behind in the store.
+        if state.get("dry_run"):
+            logger.info(
+                "ticket_dry_run",
+                ticket_id=ticket.id,
+                category=classification.category.value,
+                confidence=suggestion.confidence,
+            )
+            return {"ticket": ticket}
 
         await store.save(ticket, suggestion, auto_sent=auto_sent)
 

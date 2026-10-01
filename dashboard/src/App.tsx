@@ -11,6 +11,7 @@ import { TicketDetailPage } from "./pages/TicketDetailPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { KnowledgeBasePage } from "./pages/KnowledgeBasePage";
 import { SettingsPage } from "./pages/SettingsPage";
+import { SetupPage } from "./pages/SetupPage";
 
 type Health = { shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean } | null;
 
@@ -23,6 +24,15 @@ export default function App() {
 
   useEffect(() => {
     if (connection) api.health(connection).then(setHealth).catch(() => setHealth(null));
+  }, [connection]);
+
+  // First load of an unconfigured instance lands the user on the setup wizard.
+  useEffect(() => {
+    if (!connection) return;
+    api.setupStatus(connection)
+      .then((s) => { if (!s.setup_complete) setView("setup"); })
+      .catch(() => { /* status endpoint unavailable — keep default view */ });
+    // eslint-disable-line react-hooks/exhaustive-deps
   }, [connection]);
 
   useEffect(() => {
@@ -69,6 +79,7 @@ export default function App() {
             )}
             {view === "analytics" && <AnalyticsPage connection={connection} />}
             {view === "knowledge-base" && <KnowledgeBasePage connection={connection} />}
+            {view === "setup" && <SetupPage connection={connection} onNavigate={navigateTo} />}
             {view === "settings" && <SettingsPage connection={connection} health={health} />}
           </main>
           <CommandPalette

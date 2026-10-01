@@ -23,6 +23,7 @@ from agent.models import (
     TicketMessage,
 )
 from agent.observability import record_llm_call
+from agent.setup_store import get_voice
 from agent.utils import redact_pii
 
 logger = structlog.get_logger(__name__)
@@ -80,6 +81,36 @@ class _RawSuggestion(BaseModel):
     suggested_action: _RawSuggestedAction | None = None
 
 
+_TONE_GUIDANCE = {
+    "friendly": "Warm and approachable — like a helpful small-business owner.",
+    "professional": "Polished and courteous — clear, no slang, no exclamation overload.",
+    "casual": "Relaxed and conversational — contractions and a light tone are fine.",
+}
+
+
+def build_voice_block(voice: dict[str, str]) -> str:
+    """Brand-voice section appended to the system prompt. Empty string when the
+    store hasn't customized anything, so the default prompt stays untouched."""
+    store_name = voice.get("store_name", "")
+    sign_off = voice.get("sign_off", "")
+    support_email = voice.get("support_email", "")
+    tone = voice.get("tone", "friendly")
+
+    if not (store_name or sign_off or support_email) and tone == "friendly":
+        return ""
+
+    lines = ["", "Brand voice for this store:"]
+    if store_name:
+        lines.append(f'- You are the support team for "{store_name}".')
+    if tone in _TONE_GUIDANCE:
+        lines.append(f"- Tone: {_TONE_GUIDANCE[tone]}")
+    if sign_off:
+        lines.append(f'- Close the reply with this sign-off: "{sign_off}"')
+    if support_email:
+        lines.append(f"- If the customer needs to reach a human, give them: {support_email}")
+    return "\n".join(lines)
+
+
 class ResponseGenerationEngine:
     def __init__(self):
         self.model_name = (
@@ -111,9 +142,10 @@ class ResponseGenerationEngine:
         transcript = format_transcript(history) if history else f"Customer: {ticket.body}"
         redacted_transcript = redact_pii(transcript)
         redacted_customer = redact_pii(ticket.customer_name or ticket.customer_email)
+        voice_block = build_voice_block(await get_voice())
 
         messages = [
-            ("system", SYSTEM_PROMPT),
+            ("system", SYSTEM_PROMPT + voice_block),
             (
                 "human",
                 f"Customer: {redacted_customer}\n"

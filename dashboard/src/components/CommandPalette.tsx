@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Inbox, BarChart3, BookOpen, Settings } from "lucide-react";
+import { Search, Inbox, BarChart3, BookOpen, Settings, Wand2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Connection } from "../lib/api";
 import type { TicketWithSuggestion } from "../lib/types";
+import type { View } from "./Sidebar";
 
 interface Props {
   open: boolean;
   onClose: () => void;
-  onNavigate: (v: "tickets" | "analytics" | "knowledge-base" | "settings") => void;
+  onNavigate: (v: View) => void;
   onOpenTicket: (id: string) => void;
   connection: Connection;
 }
@@ -64,6 +65,7 @@ export function CommandPalette({ open, onClose, onNavigate, onOpenTicket, connec
     { id: "tickets" as const, label: "Tickets", icon: Inbox },
     { id: "analytics" as const, label: "Analytics", icon: BarChart3 },
     { id: "knowledge-base" as const, label: "Knowledge base", icon: BookOpen },
+    { id: "setup" as const, label: "Setup", icon: Wand2 },
     { id: "settings" as const, label: "Settings", icon: Settings },
   ];
 
