@@ -166,9 +166,13 @@ async def list_tickets(
     rows = await store.list(
         status=status, category=category, priority=priority, page=page, limit=limit
     )
+    total = await store.count(status=status, category=category, priority=priority)
     return {
-        "tickets": [r["ticket"] for r in rows],
-        "total": len(rows),
+        "tickets": [
+            {**r["ticket"], "suggestion": r["suggestion"], "auto_sent": r["auto_sent"]}
+            for r in rows
+        ],
+        "total": total,
         "page": page,
         "limit": limit,
     }

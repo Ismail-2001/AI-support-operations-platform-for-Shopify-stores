@@ -45,7 +45,6 @@ def test_compute_cost_falls_back_to_default_pricing_for_unknown_model():
 
 
 async def test_record_llm_call_persists_trace_and_cost(test_store):
-    obs_module_store_backup = None
     import agent.storage as storage_module
 
     storage_module.store = test_store

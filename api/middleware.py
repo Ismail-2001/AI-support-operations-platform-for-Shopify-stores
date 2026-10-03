@@ -67,10 +67,12 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
 
 class WebhookBodyLimitMiddleware(BaseHTTPMiddleware):
-    """Rejects webhook requests with Content-Length exceeding the limit.
+    """Enforces webhook request body size via the Content-Length header.
 
-    Prevents memory exhaustion from malicious or buggy senders pushing
-    multi-gigabyte payloads into request.json().
+    Webhooks come from known providers posting JSON — they always send
+    Content-Length. Requests without it (chunked bodies) would bypass a
+    length check entirely, so they are rejected outright with 411
+    (Length Required). Malformed values get 400; oversized bodies get 413.
     """
 
     _WEBHOOK_PREFIXES: ClassVar[tuple[str, ...]] = ("/support/webhooks/",)
@@ -78,7 +80,31 @@ class WebhookBodyLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
         if any(request.url.path.startswith(p) for p in self._WEBHOOK_PREFIXES):
             content_length = request.headers.get("content-length")
-            if content_length and int(content_length) > _MAX_WEBHOOK_BODY_BYTES:
+            if content_length is None:
+                logger.warning("webhook_missing_content_length", path=request.url.path)
+                return JSONResponse(
+                    status_code=411,
+                    content={
+                        "error": "LENGTH_REQUIRED",
+                        "message": "Content-Length header required for webhook requests",
+                    },
+                )
+            try:
+                length = int(content_length)
+            except ValueError:
+                logger.warning(
+                    "webhook_invalid_content_length",
+                    path=request.url.path,
+                    content_length=content_length,
+                )
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "INVALID_CONTENT_LENGTH",
+                        "message": "Content-Length header must be an integer",
+                    },
+                )
+            if length > _MAX_WEBHOOK_BODY_BYTES:
                 logger.warning(
                     "webhook_body_too_large",
                     path=request.url.path,

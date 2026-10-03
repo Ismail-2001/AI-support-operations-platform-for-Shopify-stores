@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from agent.config import settings
 from agent.conversation import format_transcript
-from agent.llm import get_fallback_llm, get_llm, invoke_with_fallback
+from agent.llm import get_fallback_llm, get_llm, invoke_with_fallback, primary_model_name
 from agent.models import (
     ActionType,
     ClassificationResult,
@@ -113,13 +113,7 @@ def build_voice_block(voice: dict[str, str]) -> str:
 
 class ResponseGenerationEngine:
     def __init__(self):
-        self.model_name = (
-            settings.GROQ_MODEL
-            if settings.GROQ_API_KEY
-            else settings.GEMINI_MODEL
-            if settings.GOOGLE_API_KEY
-            else settings.OPENROUTER_MODEL
-        )
+        self.model_name = primary_model_name()
         self.fallback_model_name = settings.FALLBACK_MODEL
         self.llm = get_llm(temperature=0.3).with_structured_output(_RawSuggestion, include_raw=True)
         fallback_raw = get_fallback_llm(temperature=0.3)

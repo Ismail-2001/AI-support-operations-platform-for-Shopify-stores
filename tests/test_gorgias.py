@@ -12,7 +12,6 @@ from integrations.gorgias import (
     _is_transient_gorgias_error,
 )
 
-
 # ── Predicate unit tests ────────────────────────────────────
 
 

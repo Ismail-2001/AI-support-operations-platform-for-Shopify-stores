@@ -120,6 +120,22 @@ CREATE TABLE IF NOT EXISTS app_settings (
 """
 
 
+def _ticket_filters(
+    status: str | None, category: str | None, priority: str | None
+) -> tuple[str, list[Any]]:
+    """Build a WHERE clause for ticket filters stored inside the `data` JSON blob.
+
+    Column names come from a fixed tuple — never from user input — so string
+    interpolation here is safe; only values are bound as parameters."""
+    clauses: list[str] = []
+    params: list[Any] = []
+    for col, val in (("status", status), ("category", category), ("priority", priority)):
+        if val is not None:
+            clauses.append(f"json_extract(data, '$.{col}') = ?")
+            params.append(val)
+    return " AND ".join(clauses), params
+
+
 class TicketStore:
     # Bump this when you add a migration. Each migration runs in order only once.
     SCHEMA_VERSION = 2
@@ -237,22 +253,36 @@ class TicketStore:
         page: int = 1,
         limit: int = 20,
     ) -> list[dict[str, Any]]:
+        """Paginated ticket listing with optional filters.
+
+        Filters run in SQL (not Python) so LIMIT/OFFSET paginate the *filtered*
+        set — filtering after pagination returned the wrong rows for page > 1."""
+        where_sql, params = _ticket_filters(status, category, priority)
+        sql = "SELECT * FROM tickets"
+        if where_sql:
+            sql += f" WHERE {where_sql}"
+        sql += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM tickets ORDER BY created_at DESC LIMIT ? OFFSET ?",
-                (limit, (page - 1) * limit),
-            )
+            cursor = await db.execute(sql, (*params, limit, (page - 1) * limit))
             rows = await cursor.fetchall()
-            results = [self._row_to_dict(r) for r in rows]
+            return [self._row_to_dict(r) for r in rows]
 
-        if status:
-            results = [r for r in results if r["ticket"].get("status") == status]
-        if category:
-            results = [r for r in results if r["ticket"].get("category") == category]
-        if priority:
-            results = [r for r in results if r["ticket"].get("priority") == priority]
-        return results
+    async def count(
+        self,
+        status: str | None = None,
+        category: str | None = None,
+        priority: str | None = None,
+    ) -> int:
+        """Total tickets matching the filters — for accurate pagination metadata."""
+        where_sql, params = _ticket_filters(status, category, priority)
+        sql = "SELECT COUNT(*) AS total FROM tickets"
+        if where_sql:
+            sql += f" WHERE {where_sql}"
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(sql, params)
+            return (await cursor.fetchone())["total"]
 
     async def all(self) -> builtins.list[dict[str, Any]]:
         async with aiosqlite.connect(self.db_path) as db:

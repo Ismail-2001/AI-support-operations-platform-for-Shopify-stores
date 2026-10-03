@@ -123,8 +123,10 @@ async def test_fallback_classifier_records_fallback_model_name(monkeypatch):
 
 
 async def test_fallback_classifier_records_primary_model_name(monkeypatch):
-    """When Gemini succeeds on first try, traces show the primary model name."""
-    monkeypatch.setattr(settings, "GOOGLE_API_KEY", SecretStr("dummy"))
+    """When the primary model succeeds on first try, traces show the primary model name."""
+    monkeypatch.setattr(settings, "OPENROUTER_API_KEY", SecretStr("sk-or-dummy"))
+    monkeypatch.setattr(settings, "GROQ_API_KEY", None)
+    monkeypatch.setattr(settings, "GOOGLE_API_KEY", None)
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", SecretStr("sk-ant-dummy"))
 
     from agent.classifier import TicketClassifier
@@ -160,12 +162,5 @@ async def test_fallback_classifier_records_primary_model_name(monkeypatch):
 
     assert record_mock.await_count == 1
     call_kwargs = record_mock.call_args.kwargs
-    expected = (
-        settings.GROQ_MODEL
-        if settings.GROQ_API_KEY
-        else settings.GEMINI_MODEL
-        if settings.GOOGLE_API_KEY
-        else settings.OPENROUTER_MODEL
-    )
-    assert call_kwargs["model"] == expected
+    assert call_kwargs["model"] == settings.OPENROUTER_MODEL
     classifier.fallback_llm.ainvoke.assert_not_awaited()

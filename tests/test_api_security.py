@@ -47,7 +47,6 @@ def client(tmp_path, monkeypatch):
 
     # Swap the real LLM/Shopify components for deterministic fakes — no network calls,
     # no API key needed, tests run identically in CI as they do locally.
-    main_module.support_router
     cs_module._agent.classifier = FakeClassifier()
     cs_module._agent.response_engine = FakeResponseEngine()
     cs_module._agent.shopify = FakeShopify()

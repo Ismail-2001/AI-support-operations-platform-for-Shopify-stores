@@ -59,7 +59,7 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
             timeout=30,
             base_url="https://openrouter.ai/api/v1",
             default_headers={
-                "HTTP-Referer": "https://github.com/anomalyco/cs-agent",
+                "HTTP-Referer": "https://github.com/Ismail-2001/customer-support-ai-employee",
                 "X-Title": "CS-Agent",
             },
         )
@@ -81,6 +81,20 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
         "No LLM API key configured. Set OPENROUTER_API_KEY, GROQ_API_KEY, or GOOGLE_API_KEY "
         "in your .env file."
     )
+
+
+def primary_model_name() -> str:
+    """Model label for whichever provider get_llm() would pick — same priority
+    chain (OpenRouter > Groq > Google Gemini) so traces never mislabel the model.
+    Unreachable-without-keys path returns the OpenRouter default; get_llm()
+    raises at call time if no provider is configured."""
+    if settings.OPENROUTER_API_KEY:
+        return settings.OPENROUTER_MODEL
+    if settings.GROQ_API_KEY:
+        return settings.GROQ_MODEL
+    if settings.GOOGLE_API_KEY:
+        return settings.GEMINI_MODEL
+    return settings.OPENROUTER_MODEL
 
 
 def get_fallback_llm(temperature: float = 0.0) -> ChatAnthropic | None:

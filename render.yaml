@@ -20,7 +20,7 @@ services:
       - key: TENANT_NAME
         sync: false
 
-      # ── LLM (primary: Groq > Gemini > OpenRouter; fallback: Claude) ──
+      # ── LLM (primary: OpenRouter > Groq > Gemini; fallback: Claude) ──
       - key: GROQ_API_KEY
         sync: false
       - key: GROQ_MODEL

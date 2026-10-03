@@ -10,6 +10,7 @@ Tests verify:
 
 import os
 import sys
+from typing import ClassVar
 
 import pytest
 
@@ -264,7 +265,7 @@ class TestListOpenTickets:
 class TestNoWriteToolsSafety:
     """Safety regression test - ensure NO write/mutating tools are exposed."""
 
-    WRITE_KEYWORDS = [
+    WRITE_KEYWORDS: ClassVar[list[str]] = [
         "refund",
         "approve",
         "create",
