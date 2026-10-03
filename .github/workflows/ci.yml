@@ -88,6 +88,9 @@ jobs:
       - name: TypeScript check
         run: npx tsc --noEmit
 
+      - name: Run tests
+        run: npm test
+
       - name: Build
         run: npm run build
 
