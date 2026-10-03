@@ -74,7 +74,9 @@ export function KnowledgeBasePage({ connection }: { connection: Connection }) {
           <BookOpen className="w-5 h-5 text-teal" />
           <div>
             <p className="text-sm font-medium text-ink-900 dark:text-ink-dark-900">{chunkCount ?? "–"} chunks indexed</p>
-            <p className="text-xs text-ink-400 dark:text-ink-dark-400">Policies, FAQs, and product descriptions the agent can cite.</p>
+            <p className="text-xs text-ink-400 dark:text-ink-dark-400">
+              These are the only sources the agent can use — every reply stays grounded in this content.
+            </p>
           </div>
         </div>
         <button

@@ -144,6 +144,7 @@ class AgentDecision(BaseModel):
     classification: ClassificationResult
     suggestion: ResponseSuggestion
     order_context_used: bool
+    kb_used: bool = False
     auto_sent: bool
 
 

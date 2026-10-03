@@ -112,7 +112,10 @@ export function AnalyticsPage({ connection }: { connection: Connection }) {
       <Section title="Confidence calibration">
         <p className="text-xs text-ink-600 dark:text-ink-dark-600 mb-4 leading-relaxed">{calibration?.interpretation}</p>
         {calibrationChartData.length === 0 ? (
-          <p className="text-sm text-ink-400 dark:text-ink-dark-400">No edited drafts logged yet — this fills in once tickets are answered.</p>
+          <p className="text-sm text-ink-400 dark:text-ink-dark-400">
+            No edit data yet. This chart fills in after you approve or edit a few drafts on the Tickets page —
+            it compares the agent's confidence with how often drafts actually needed changes.
+          </p>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={calibrationChartData}>
@@ -144,7 +147,10 @@ export function AnalyticsPage({ connection }: { connection: Connection }) {
 
       <Section title="Edit rate by category">
         {qualityChartData.length === 0 ? (
-          <p className="text-sm text-ink-400 dark:text-ink-dark-400">No data yet.</p>
+          <p className="text-sm text-ink-400 dark:text-ink-dark-400">
+            No edit-rate data yet. When you approve or edit a drafted reply, we record whether it needed changes —
+            this chart starts filling in from your first reviewed ticket.
+          </p>
         ) : (
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={qualityChartData} layout="vertical">

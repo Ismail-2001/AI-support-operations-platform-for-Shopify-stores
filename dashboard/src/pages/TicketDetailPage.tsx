@@ -200,6 +200,9 @@ export function TicketDetailPage({ connection, ticketId, onBack }: { connection:
               <Send className="w-3.5 h-3.5" />
               {sendState === "sent" ? "Sent" : sendState === "sending" ? "Sending…" : "Send reply"}
             </button>
+            <p className="text-[11px] text-ink-400 dark:text-ink-dark-400 text-center mt-2 leading-relaxed">
+              Review mode — nothing sends until you approve it.
+            </p>
           </div>
         </div>
       </div>

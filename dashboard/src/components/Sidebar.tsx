@@ -58,15 +58,15 @@ export function Sidebar({
         </button>
         <div className="flex items-center gap-2 text-xs text-white/50">
           <span className={`w-1.5 h-1.5 rounded-full ${health?.auto_send_enabled ? "bg-teal" : "bg-gold"}`} />
-          Auto-send {health?.auto_send_enabled ? "on" : "off"}
+          Auto-send: {health?.auto_send_enabled ? "On" : "Off (Review mode)"}
         </div>
         <div className="flex items-center gap-2 text-xs text-white/50">
           <span className={`w-1.5 h-1.5 rounded-full ${health?.shopify_connected ? "bg-teal" : "bg-gold"}`} />
-          Shopify {health?.shopify_connected ? "connected" : "off"}
+          Shopify: {health?.shopify_connected ? "Connected" : "Not connected"}
         </div>
         <div className="flex items-center gap-2 text-xs text-white/50">
-          <span className={`w-1.5 h-1.5 rounded-full ${health?.gorgias_connected ? "bg-teal" : "bg-gold"}`} />
-          Gorgias {health?.gorgias_connected ? "connected" : "off"}
+          <span className={`w-1.5 h-1.5 rounded-full ${health?.gorgias_connected ? "bg-teal" : "bg-white/30"}`} />
+          Gorgias: {health?.gorgias_connected ? "Connected" : "Not configured"}
         </div>
         <button
           onClick={onDisconnect}

@@ -79,5 +79,6 @@ class CustomerSupportAgent:
             classification=final_state["classification"],
             suggestion=final_state["suggestion"],
             order_context_used=final_state["order_used"],
+            kb_used=final_state["kb_used"],
             auto_sent=final_state["auto_sent"],
         )

@@ -25,7 +25,7 @@ export function ConfidenceBar({
           className={`absolute inset-y-0 left-0 rounded-full ${color} transition-[width] duration-500 ease-out`}
           style={{ width: `${pct}%` }}
         />
-        {/* calibration tick at the auto-send threshold, a quiet reference mark */}
+        {/* calibration tick at the review threshold, a quiet reference mark */}
         <div className="absolute inset-y-0 left-[85%] w-px bg-ink-900/20 dark:bg-white/20" />
       </div>
       {showLabel && (

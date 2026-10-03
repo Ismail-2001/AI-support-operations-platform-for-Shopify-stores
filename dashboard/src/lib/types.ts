@@ -143,4 +143,5 @@ export interface SetupTestResult {
   };
   suggestion: ResponseSuggestion;
   order_context_used: boolean;
+  kb_used?: boolean;
 }

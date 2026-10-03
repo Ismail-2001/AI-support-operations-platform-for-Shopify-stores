@@ -39,9 +39,9 @@ describe("Sidebar", () => {
 
   it("shows health status indicators", () => {
     renderSidebar();
-    expect(screen.getByText(/Shopify connected/)).toBeInTheDocument();
-    expect(screen.getByText(/Gorgias off/)).toBeInTheDocument();
-    expect(screen.getByText(/Auto-send on/)).toBeInTheDocument();
+    expect(screen.getByText(/Shopify: Connected/)).toBeInTheDocument();
+    expect(screen.getByText(/Gorgias: Not configured/)).toBeInTheDocument();
+    expect(screen.getByText(/Auto-send: On/)).toBeInTheDocument();
   });
 
   it("shows disconnect button", () => {

@@ -242,4 +242,5 @@ async def test_draft(req: SetupTestRequest):
         },
         "suggestion": decision.suggestion.model_dump(mode="json"),
         "order_context_used": decision.order_context_used,
+        "kb_used": decision.kb_used,
     }

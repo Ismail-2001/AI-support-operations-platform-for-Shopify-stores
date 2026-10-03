@@ -147,7 +147,7 @@ export function TicketsPage({ connection, onOpenTicket }: { connection: Connecti
           <Inbox className="w-8 h-8 text-ink-400 dark:text-ink-dark-400 mx-auto mb-3" strokeWidth={1.5} />
           <p className="text-sm text-ink-600 dark:text-ink-dark-600">{search ? "No tickets match your search." : "No tickets here yet."}</p>
           <p className="text-xs text-ink-400 dark:text-ink-dark-400 mt-1">
-            {search ? "Try a different search term." : "New tickets from Gorgias or the API will show up in this list."}
+            {search ? "Try a different search term." : "New customer messages will appear here as they come in."}
           </p>
         </div>
       )}
@@ -170,7 +170,11 @@ export function TicketsPage({ connection, onOpenTicket }: { connection: Connecti
                 <p className="text-sm text-ink-600 dark:text-ink-dark-600 truncate">{t.subject}</p>
               </div>
               <div className="flex items-center gap-6 shrink-0">
-                {t.suggestion && <div className="w-28"><ConfidenceBar value={t.suggestion.confidence} size="sm" /></div>}
+                {t.suggestion ? (
+                  <div className="w-28"><ConfidenceBar value={t.suggestion.confidence} size="sm" /></div>
+                ) : (
+                  <div className="w-28 text-center text-xs text-ink-400 dark:text-ink-dark-400" title="No draft generated yet">–</div>
+                )}
                 <span className="font-mono text-xs text-ink-400 dark:text-ink-dark-400 w-16 text-right">{timeAgo(t.created_at)}</span>
               </div>
             </button>

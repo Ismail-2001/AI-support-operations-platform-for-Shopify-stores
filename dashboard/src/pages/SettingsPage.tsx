@@ -81,8 +81,11 @@ export function SettingsPage({ connection, health }: Props) {
         <Field label="Gorgias">
           <Badge ok={!!health?.gorgias_connected} label={health?.gorgias_connected ? "Connected" : "Not configured"} />
         </Field>
-        <Field label="Auto-send">
-          <Badge ok={!!health?.auto_send_enabled} label={health?.auto_send_enabled ? "Enabled" : "Disabled"} />
+        <Field label="Sending mode">
+          <Badge
+            ok={!health?.auto_send_enabled}
+            label={health?.auto_send_enabled ? "Auto-send — on" : "Review mode — you approve each reply"}
+          />
         </Field>
       </Section>
 

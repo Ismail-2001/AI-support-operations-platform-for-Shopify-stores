@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-  AlertCircle, ArrowLeft, ArrowRight, Check, Link2, Loader2,
-  MessageSquareText, Music, Package, Sparkles,
+  AlertCircle, ArrowLeft, ArrowRight, BookOpen, Check, Eye, Link2, Loader2,
+  MessageSquareText, Music, Package, ShoppingBag, Sparkles,
 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Connection } from "../lib/api";
 import type { BrandVoice, SetupStatus, SetupTestResult } from "../lib/types";
 import type { View } from "../components/Sidebar";
+import { ConfidenceBar } from "../components/ConfidenceBar";
 
 const STEPS = [
   { id: "shopify", label: "Store", icon: Link2, blurb: "Connect the Shopify store" },
@@ -303,6 +304,13 @@ export function SetupPage({ connection, onNavigate }: { connection: Connection; 
               <input type="email" value={voice.support_email} onChange={(e) => setVoice({ ...voice, support_email: e.target.value })}
                 placeholder="help@yourstore.com" className={inputCls} />
             </div>
+            <div className="rounded-lg bg-bg dark:bg-bg-dark border border-line dark:border-line-dark px-4 py-3">
+              <p className="text-[11px] font-mono uppercase tracking-wider text-ink-400 dark:text-ink-dark-400 mb-1">Every draft will end with</p>
+              <p className="text-sm text-ink-800 dark:text-ink-dark-800">
+                {voice.sign_off.trim() ||
+                  (voice.store_name.trim() ? `Thanks! — The ${voice.store_name.trim()} team` : "Thanks! — The team")}
+              </p>
+            </div>
             <button type="submit" disabled={busy} className={primaryBtn}>
               {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
               Save voice
@@ -337,24 +345,58 @@ export function SetupPage({ connection, onNavigate }: { connection: Connection; 
           </form>
 
           {testResult && (
-            <div className="mt-5 border-t border-line dark:border-line-dark pt-4 space-y-3">
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-[11px] font-mono uppercase tracking-wider text-ink-400 dark:text-ink-dark-400">Classified as</span>
-                <span className="text-xs font-medium bg-teal/10 text-teal-700 dark:text-teal rounded-full px-2.5 py-1">
-                  {testResult.classification.category}
-                </span>
-                <span className="text-xs font-medium bg-bg dark:bg-bg-dark border border-line dark:border-line-dark rounded-full px-2.5 py-1">
-                  {testResult.classification.priority} priority
-                </span>
-                <span className="text-xs text-ink-400 dark:text-ink-dark-400">
-                  confidence {Math.round(testResult.suggestion.confidence * 100)}%
-                  {testResult.suggestion.requires_human_review ? " · human review" : " · auto-sendable"}
-                </span>
-              </div>
-              <div className="rounded-lg bg-bg dark:bg-bg-dark border border-line dark:border-line-dark p-4">
-                <p className="text-[11px] font-mono uppercase tracking-wider text-ink-400 dark:text-ink-dark-400 mb-2">Draft reply</p>
+            <div className="mt-5 border-t border-line dark:border-line-dark pt-5 space-y-3.5">
+              <div className="rounded-xl2 border border-line dark:border-line-dark bg-bg dark:bg-bg-dark p-5">
+                <div className="flex items-center justify-between gap-3 flex-wrap mb-4">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-ink-400 dark:text-ink-dark-400">Draft result</span>
+                    <span className="text-xs font-medium bg-teal/10 text-teal-700 dark:text-teal rounded-full px-2.5 py-1">
+                      {testResult.classification.category}
+                    </span>
+                    <span className="text-xs font-medium bg-surface dark:bg-surface-dark border border-line dark:border-line-dark rounded-full px-2.5 py-1">
+                      {testResult.classification.priority} priority
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[11px] font-mono uppercase tracking-wider text-ink-400 dark:text-ink-dark-400">Confidence</span>
+                    <span className="font-display text-2xl text-ink-900 dark:text-ink-dark-900 leading-none">
+                      {Math.round(testResult.suggestion.confidence * 100)}%
+                    </span>
+                    <div className="w-28">
+                      <ConfidenceBar value={testResult.suggestion.confidence} showLabel={false} />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 flex-wrap mb-4 pb-4 border-b border-line dark:border-line-dark">
+                  <span className="text-[11px] font-mono uppercase tracking-wider text-ink-400 dark:text-ink-dark-400 mr-1">Grounded in</span>
+                  {testResult.order_context_used && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-teal/10 text-teal-700 dark:text-teal rounded-full px-2.5 py-1">
+                      <ShoppingBag className="w-3 h-3" /> Real Shopify order data
+                    </span>
+                  )}
+                  {testResult.kb_used && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-teal/10 text-teal-700 dark:text-teal rounded-full px-2.5 py-1">
+                      <BookOpen className="w-3 h-3" /> Your knowledge base
+                    </span>
+                  )}
+                  {!testResult.order_context_used && !testResult.kb_used && (
+                    <span className="text-xs text-ink-400 dark:text-ink-dark-400">
+                      General reply — no matching order or policy found
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[11px] font-mono uppercase tracking-wider text-ink-400 dark:text-ink-dark-400 mb-2">Drafted reply</p>
                 <p className="text-sm text-ink-800 dark:text-ink-dark-800 whitespace-pre-wrap leading-relaxed">
                   {testResult.suggestion.suggested_response}
+                </p>
+              </div>
+              <div className="flex items-start gap-2.5 rounded-lg bg-teal/5 border border-teal/20 px-4 py-3.5">
+                <Eye className="w-4 h-4 text-teal shrink-0 mt-0.5" strokeWidth={2} />
+                <p className="text-xs text-ink-700 dark:text-ink-dark-700 leading-relaxed">
+                  This is a preview only — nothing was sent to any customer.
+                  {testResult.suggestion.requires_human_review && " Every draft requires your approval before it can be sent."}
                 </p>
               </div>
               <button onClick={() => onNavigate("tickets")} className={primaryBtn}>
