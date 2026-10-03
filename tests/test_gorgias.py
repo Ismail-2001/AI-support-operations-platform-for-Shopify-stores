@@ -21,9 +21,7 @@ class _FakeResponse:
 
 
 def _http_error(status: int) -> httpx.HTTPStatusError:
-    return httpx.HTTPStatusError(
-        str(status), request=MagicMock(), response=_FakeResponse(status)
-    )
+    return httpx.HTTPStatusError(str(status), request=MagicMock(), response=_FakeResponse(status))
 
 
 class TestGorgiasRetryPredicate:
@@ -171,9 +169,7 @@ class TestNormalizeWebhookPayload:
                 "id": 4,
                 "subject": "Test",
                 "customer": {"email": "x@test.com"},
-                "messages": [
-                    {"body_text": "", "stripped_text": "Stripped content"}
-                ],
+                "messages": [{"body_text": "", "stripped_text": "Stripped content"}],
             }
         }
         ticket = GorgiasClient.normalize_webhook_payload(payload)

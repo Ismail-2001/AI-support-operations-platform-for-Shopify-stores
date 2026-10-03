@@ -24,9 +24,8 @@ _EXP_BACKOFF = {
 def _is_transient_shopify_error(exc: BaseException) -> bool:
     """Transient = 5xx server error, timeout, or connection error.
     4xx client errors are never retried — they mean the request itself is wrong."""
-    return (
-        isinstance(exc, httpx.TimeoutException | httpx.TransportError)
-        or (isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600)
+    return isinstance(exc, httpx.TimeoutException | httpx.TransportError) or (
+        isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600
     )
 
 
