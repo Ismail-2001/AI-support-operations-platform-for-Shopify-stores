@@ -11,7 +11,7 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-168%2B%20Python%20%7C%2060%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
+[![Tests](https://img.shields.io/badge/Tests-180%2B%20Python%20%7C%2067%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -97,6 +97,12 @@ Every LLM call is logged with exact input (transcript + context), output, latenc
 ### Operator Dashboard
 
 React + TypeScript + Tailwind dashboard for reviewing tickets, tracking analytics, managing the knowledge base, and monitoring cost spend. Dark mode, command palette (`Ctrl+K`), CSV export, customer info panels.
+
+### 10-Minute Onboarding Wizard
+
+A guided four-step setup turns a raw store into a working agent: **connect Shopify → import policies & products into the knowledge base → set brand voice (tone, sign-off, support email) → send a live test ticket and review the draft.**
+
+The result card shows grounding evidence — which parts came from real Shopify order data vs. the knowledge base — plus a confidence score, before anything ships. Auto-send stays in review mode until you explicitly turn it on.
 
 <details>
 <summary><b>Competitive Advantages — Why This Beats Generic Chatbots</b></summary>
@@ -254,16 +260,17 @@ sequenceDiagram
 | **Runtime** | Python 3.12+ | Core application language |
 | **API Framework** | FastAPI 0.115 | Async REST + webhook endpoints |
 | **LLM Orchestration** | LangGraph 0.3 | State machine for agent pipeline |
-| **LLM Provider** | OpenRouter (gpt-4o-mini) | Primary: eval-validated, reliable |
-| **LLM Alternative** | Groq (llama-3.3-70b) | Fast, cheap, not eval-validated |
-| **LLM Fallback** | Claude Haiku | Automatic failover chain |
+| **LLM Provider** | OpenRouter (gpt-4o-mini) | Primary — eval-validated (15/15) |
+| **LLM Secondary** | Groq (llama-3.3-70b) | Second in chain — re-run evals when switching |
+| **LLM Tertiary** | Google Gemini | Third in chain |
+| **LLM Fallback** | Claude Haiku | On primary exhaustion (optional, `ANTHROPIC_API_KEY`) |
 | **Database** | SQLite + WAL mode | Tickets, KB vectors, traces, costs |
 | **Vector Search** | NumPy + SQLite | Local cosine similarity (zero infra) |
-| **Embeddings** | Google Gemini | text-embedding-004 (free tier) |
+| **Embeddings** | Google Gemini | gemini-embedding-001 |
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 168 Python + 60 frontend tests |
+| **Testing** | Pytest + Vitest | 180 Python + 67 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -364,18 +371,17 @@ Dashboard: **http://localhost:5173**
 | `TENANT_NAME` | Yes | Deployment label (one per client) |
 | `OPENROUTER_API_KEY` | Yes* | Primary LLM provider key (eval-validated) |
 | `OPENROUTER_MODEL` | No | Default: `openai/gpt-4o-mini` |
-| `GROQ_API_KEY` | Yes* | Alternative LLM provider (not eval-validated) |
+| `GROQ_API_KEY` | No* | Second-choice LLM key (not eval-validated) |
 | `GROQ_MODEL` | No | Default: `llama-3.3-70b-versatile` |
-| `GOOGLE_API_KEY` | Yes | **Required for Knowledge Base / RAG** — embeddings use Google's text-embedding-004 regardless of chat provider |
+| `GOOGLE_API_KEY` | Yes | Chat fallback (Gemini) **and required for Knowledge Base / RAG** — embeddings use `gemini-embedding-001` regardless of chat provider |
 | `SHOPIFY_SHOP_DOMAIN` | Yes | Your Shopify store domain |
 | `SHOPIFY_ACCESS_TOKEN` | Yes | Admin API token (read_orders scope) |
 | `GORGIAS_DOMAIN` | Yes | Gorgias subdomain |
 | `GORGIAS_EMAIL` | Yes | Gorgias login email |
 | `GORGIAS_API_KEY` | Yes | Gorgias REST API key |
 | `API_KEY` | Yes | Auth key for all `/support/*` endpoints |
-| `GOOGLE_API_KEY` | For KB | Google AI key for embeddings |
 
-*Or set `OPENROUTER_API_KEY` instead*
+*At least one chat provider key is required (`OPENROUTER_API_KEY` > `GROQ_API_KEY` > `GOOGLE_API_KEY` — first match wins). `GOOGLE_API_KEY` is additionally required for the Knowledge Base.*
 
 ### Safety Gates
 
@@ -419,6 +425,15 @@ Dashboard: **http://localhost:5173**
 |---|---|---|
 | `POST` | `/support/tickets/{id}/actions/refund` | Execute a real Shopify refund. Requires `Idempotency-Key` header. |
 | `POST` | `/support/tickets/{id}/actions/resend-order` | Create a replacement order in Shopify. Requires `Idempotency-Key` header. |
+
+### Setup Wizard
+
+| Method | Path | Description | Auth |
+|---|---|---|---|
+| `GET` | `/support/setup` | Wizard progress — which steps are done (Shopify, KB chunks, voice, test) | API Key |
+| `POST` | `/support/setup/shopify` | Connect Shopify + import policies/products into the KB | API Key |
+| `PUT` | `/support/setup/voice` | Save brand voice (store name, tone, sign-off, support email) | API Key |
+| `POST` | `/support/setup/test` | Send a live test ticket; returns draft + grounding + confidence | API Key |
 
 ### Webhooks
 
@@ -472,7 +487,7 @@ Error codes: `TICKET_NOT_FOUND`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `NO_
 |---|---|---|
 | **API Authentication** | All `/support/*` endpoints gated by `X-API-Key` | Constant-time comparison via `hmac.compare_digest` — no timing attack vector |
 | **Webhook Authentication** | Gorgias + generic inbound use shared secrets | Each channel has its own secret — sent as `X-Webhook-Secret` header |
-| **Rate Limiting** | Per-IP sliding window | 60/min default, 10/min on refund endpoint. Returns 429 when exceeded. |
+| **Rate Limiting** | Per-IP sliding window | 60/min default, 10/min on refund endpoint. Returns 429 when exceeded. Production keys on the real client from `X-Forwarded-For` (rightmost public IP), never the proxy IP. |
 | **Idempotency** | Refunds + resends require `Idempotency-Key` header | Same key = same response — double-clicks and retries never double-refund |
 | **Refund Cap** | Amount checked against real Shopify order total | Request over order total is rejected outright |
 | **Audit Trail** | Every action attempt logged | `refund_audit` + `resend_audit` tables — success/failure + raw Shopify response |
@@ -511,11 +526,12 @@ All tests are **fully isolated** — each gets its own temp SQLite database, and
 ```bash
 cd dashboard
 npm install
-npm test          # Watch mode
-npm run test:coverage  # With coverage
+npm test              # Single run (CI mode)
+npm run test:watch    # Watch mode
+npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-60 tests covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, and ThemeProvider.
+67 tests across 9 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, and the Setup wizard.
 
 ### Eval Harness
 
@@ -539,8 +555,8 @@ The eval dataset includes **2 adversarial prompt-injection cases** that verify t
 # .github/workflows/ci.yml — On every push to main:
   1. Ruff lint + format check
   2. pytest tests/ -v
-  3. Dashboard: tsc + vitest + vite build
-  4. Docker build + healthcheck
+  3. Dashboard: tsc --noEmit + vitest + vite build
+  4. Docker image build (no push)
 ```
 
 ---
@@ -569,6 +585,7 @@ cs-agent/
 ├── api/                        # FastAPI application
 │   ├── main.py                 # Entrypoint, middleware, CORS, exception handlers
 │   ├── customer_support.py     # All routes (tickets, actions, KB, analytics)
+│   ├── setup.py                # Onboarding wizard (Shopify, policies, voice, test)
 │   ├── errors.py               # Structured APIError class + error codes
 │   └── middleware.py           # RequestID, logging, webhook body limit
 │
@@ -588,12 +605,14 @@ cs-agent/
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
-├── tests/                      # 168 unit/integration tests
+├── tests/                      # 180 unit/integration tests
 │   ├── conftest.py             # Fixtures: temp DB, FakeClassifier, FakeShopify
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests
 │   ├── test_storage.py         # Analytics + migration tests
-│   └── ...                     # 13 test files covering every module
+│   └── ...                     # 15 test files covering every module
+│
+├── sales/                      # Sales collateral (Loom script, founding offer sheet)
 │
 ├── mcp_server/                 # MCP protocol server (Claude Desktop, etc.)
 │   └── server.py               # Read-only tools over the ticket store
@@ -681,6 +700,8 @@ cd dashboard && npm run dev                 # Dashboard
 | Webhook body size limits | High | Done |
 | Pydantic V2 migration | High | Done |
 | Frontend test infrastructure | High | Done |
+| Client setup wizard (Shopify → policies → voice → test) | High | Done |
+| Frontend tests in CI | High | Done |
 | Circuit breakers for Shopify/Gorgias | Critical | Planned |
 | Conversation windowing (token budget) | Critical | Planned |
 | Dead-letter queue + Slack alerts | High | Planned |

@@ -63,6 +63,7 @@ Desktop.ini
 .mypy_cache/
 .ruff_cache/
 .coverage
+coverage/
 htmlcov/
 coverage.xml
 *.cover
