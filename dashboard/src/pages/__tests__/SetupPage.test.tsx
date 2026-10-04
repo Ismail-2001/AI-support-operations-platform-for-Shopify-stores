@@ -12,10 +12,25 @@ vi.mock("../../lib/api", () => ({
     setupVoice: vi.fn(),
     setupTest: vi.fn(),
     kbSyncShopify: vi.fn(),
+    health: vi.fn(),
   },
 }));
 
 const conn = { baseUrl: "http://localhost:8001", apiKey: "test-key" };
+
+const TEST_RESULT = {
+  classification: { category: "order_status", priority: "normal", sentiment: "neutral", reasoning: "test" },
+  suggestion: {
+    ticket_id: "t1",
+    suggested_response: "Hi! Your order #1002 is on the way.",
+    confidence: 0.72,
+    reasoning: "test",
+    requires_human_review: true,
+    follow_up_questions: [],
+  },
+  order_context_used: true,
+  kb_used: true,
+};
 
 function makeStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
   return {
@@ -33,6 +48,13 @@ function makeStatus(overrides: Partial<SetupStatus> = {}): SetupStatus {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(api.health).mockResolvedValue({
+    status: "healthy",
+    shopify_connected: true,
+    gorgias_connected: false,
+    auto_send_enabled: false,
+    storage_persistent: true,
+  });
 });
 
 describe("SetupPage", () => {
@@ -123,5 +145,64 @@ describe("SetupPage", () => {
     await waitFor(() =>
       expect(screen.getByText(/Shopify rejected the access token/)).toBeInTheDocument()
     );
+  });
+
+  it("shows a clear 'nothing was sent' reassurance after generating a draft", async () => {
+    vi.mocked(api.setupStatus).mockResolvedValue(
+      makeStatus({
+        shopify: { connected: true, domain: "acme.myshopify.com" },
+        knowledge_base: { chunk_count: 12 },
+        voice_set: true,
+        steps: { shopify: true, policies: true, voice: true, test: false },
+      })
+    );
+    vi.mocked(api.setupTest).mockResolvedValue(TEST_RESULT);
+    render(<SetupPage connection={conn} onNavigate={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText("Test it live")).toBeInTheDocument());
+
+    await userEvent.type(
+      screen.getByPlaceholderText("Hi, where is my order #1002?"),
+      "Where is my order #1002?"
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Generate draft/i }));
+
+    await waitFor(() =>
+      expect(
+        screen.getByText("This is only a preview. Nothing was sent to any customer.")
+      ).toBeInTheDocument()
+    );
+    expect(screen.getByText(/Finish setup/i)).toBeInTheDocument();
+  });
+
+  it("finishes with a 'You're ready' screen showing review mode is active", async () => {
+    vi.mocked(api.setupStatus).mockResolvedValue(
+      makeStatus({
+        shopify: { connected: true, domain: "acme.myshopify.com" },
+        knowledge_base: { chunk_count: 12 },
+        voice_set: true,
+        steps: { shopify: true, policies: true, voice: true, test: false },
+      })
+    );
+    vi.mocked(api.setupTest).mockResolvedValue(TEST_RESULT);
+    const onNavigate = vi.fn();
+    render(<SetupPage connection={conn} onNavigate={onNavigate} />);
+    await waitFor(() => expect(screen.getByText("Test it live")).toBeInTheDocument());
+
+    await userEvent.type(
+      screen.getByPlaceholderText("Hi, where is my order #1002?"),
+      "Where is my order #1002?"
+    );
+    await userEvent.click(screen.getByRole("button", { name: /Generate draft/i }));
+    await waitFor(() => expect(screen.getByText(/Finish setup/i)).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /Finish setup/i }));
+    await waitFor(() => expect(screen.getByText("You're ready")).toBeInTheDocument());
+    expect(
+      screen.getByText(/Review mode is active — you approve every draft/)
+    ).toBeInTheDocument();
+    expect(screen.getByText(/New customer emails land in the/)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /Open Tickets/i }));
+    expect(onNavigate).toHaveBeenCalledWith("tickets");
   });
 });
