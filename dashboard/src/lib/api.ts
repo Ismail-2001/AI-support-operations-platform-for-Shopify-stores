@@ -1,7 +1,7 @@
 import type {
-  BrandVoice, CalibrationReport, CostReport, KnowledgeBaseStatus, QualityStats,
-  SetupShopifyResult, SetupStatus, SetupTestResult, SupportAnalytics, TicketMessage,
-  TicketWithSuggestion, TraceEntry,
+  AutoSendReport, BrandVoice, CalibrationReport, CostReport, KnowledgeBaseStatus, QualityStats,
+  SetupShopifyResult, SetupStatus, SetupTestResult, SupportAnalytics, ThresholdSetting, TicketMessage,
+  TicketOrder, TicketWithSuggestion, TraceEntry,
 } from "./types";
 
 export class ApiError extends Error {
@@ -30,7 +30,7 @@ async function request<T>(conn: Connection, path: string, init?: RequestInit): P
     let detail = res.statusText;
     try {
       const body = await res.json();
-      detail = body.detail || JSON.stringify(body);
+      detail = body.message || body.detail || JSON.stringify(body);
     } catch {
       /* ignore */
     }
@@ -67,12 +67,59 @@ export const api = {
       body: JSON.stringify({ response, send_via_gorgias: sendViaGorgias }),
     }),
 
-  approveRefund: (conn: Connection, id: string, amount: number, reason: string, idempotencyKey: string) =>
+  approveRefund: (
+    conn: Connection,
+    id: string,
+    amount: number,
+    reason: string,
+    idempotencyKey: string,
+    refundLineItems?: { line_item_id: number; quantity: number }[],
+  ) =>
     request(conn, `/support/tickets/${id}/actions/refund`, {
       method: "POST",
       headers: { "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify({ amount, reason, notify_customer: true }),
+      body: JSON.stringify({
+        amount,
+        reason,
+        notify_customer: true,
+        ...(refundLineItems && refundLineItems.length > 0
+          ? { refund_line_items: refundLineItems }
+          : {}),
+      }),
     }),
+
+  approveResend: (conn: Connection, id: string, reason: string, idempotencyKey: string) =>
+    request(conn, `/support/tickets/${id}/actions/resend-order`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ reason, notify_customer: true }),
+    }),
+
+  approveCancel: (conn: Connection, id: string, reason: string, notifyCustomer: boolean, idempotencyKey: string) =>
+    request(conn, `/support/tickets/${id}/actions/cancel`, {
+      method: "POST",
+      headers: { "Idempotency-Key": idempotencyKey },
+      body: JSON.stringify({ reason, notify_customer: notifyCustomer }),
+    }),
+
+  approveEditAddress: (
+    conn: Connection,
+    id: string,
+    address: Record<string, string>,
+    reason: string,
+    idempotencyKey: string,
+  ) =>
+    request<{ previous_address: Record<string, string>; address: Record<string, string> }>(
+      conn,
+      `/support/tickets/${id}/actions/edit-address`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify({ address, reason }),
+      },
+    ),
+
+  getTicketOrder: (conn: Connection, id: string) => request<TicketOrder>(conn, `/support/tickets/${id}/order`),
 
   updateTicket: (conn: Connection, id: string, updates: { status?: string; priority?: string }) =>
     request(conn, `/support/tickets/${id}`, { method: "PATCH", body: JSON.stringify(updates) }),
@@ -81,6 +128,14 @@ export const api = {
   getQuality: (conn: Connection) => request<QualityStats>(conn, "/support/analytics/quality"),
   getCalibration: (conn: Connection) => request<CalibrationReport>(conn, "/support/analytics/calibration"),
   getCosts: (conn: Connection, days = 14) => request<CostReport>(conn, `/support/analytics/costs?days=${days}`),
+  getAutoSendReport: (conn: Connection) => request<AutoSendReport>(conn, "/support/analytics/auto-send"),
+  getThresholds: (conn: Connection) => request<{ thresholds: ThresholdSetting[] }>(conn, "/support/automation/thresholds"),
+  updateThreshold: (conn: Connection, category: string, minConfidence: number | null) =>
+    request<{ category: string; min_confidence: number; source: string }>(
+      conn,
+      "/support/automation/thresholds",
+      { method: "PUT", body: JSON.stringify({ category, min_confidence: minConfidence }) },
+    ),
 
   kbStatus: (conn: Connection) => request<KnowledgeBaseStatus>(conn, "/support/knowledge-base"),
   kbIngest: (conn: Connection, source: string, title: string, content: string) =>

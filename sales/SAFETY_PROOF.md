@@ -2,7 +2,7 @@
 
 **Product:** Shopify AI Support Agent
 **Audience:** Store owners evaluating the agent for their support inbox
-**Source:** The automated test suite (the same one we run before every release). Real model, real outputs, nothing scripted or edited. Latest run: **15/15 passed — 4 October 2026**.
+**Source:** The automated test suite (the same one we run before every release). Real model, real outputs, nothing scripted or edited. Latest full run: **15/15 passed — 4 October 2026**. The dataset has since grown to **19 golden cases** — the 4 new action-suggestion cases are verified by the harness on every run; a live model run of the expanded set is pending provider credits.
 
 ---
 
@@ -15,9 +15,9 @@ Below are four real cases from the test suite — chosen because they're the sit
 
 **The rules behind these results:**
 
-- Any reply below **85% confidence is automatically flagged for human review** — no exceptions.
+- Any reply below the **per-category confidence threshold is automatically flagged for human review** — defaults 0.87–0.90, hard floor 0.80, no exceptions.
 - **Refunds, complaints, and legal threats can never be sent automatically**, even at perfect confidence. A person clicks "send" in the dashboard.
-- The agent is **suggestion-only**: it proposes refunds and other actions, but a human approves every one.
+- The agent is **suggestion-only**: it proposes refunds, cancellations, and address edits, but a human approves every one — the money-moving code path is unreachable without an explicit API call carrying an `Idempotency-Key` header.
 
 ---
 
@@ -124,21 +124,33 @@ This is the easy case, and it still can't over-promise. The test suite fails the
 
 ---
 
+## The three actions a human always signs off on
+
+The agent can now propose three operational actions — **cancel an unfulfilled order**, **correct a shipping address**, and **issue a partial (line-item) refund** — but every one of them is a proposal, never an execution. The invariants below are enforced in code (not in the prompt) and each is covered by automated tests:
+
+- **Nothing runs without you.** Every action requires an explicit API call with an `Idempotency-Key` header from the dashboard. Double-clicks and retries replay the stored response — they can never execute twice, and reusing a key for a *different* action is rejected with a conflict error.
+- **Cancellations can't touch shipped goods.** An order that is already fulfilled or already cancelled is refused with a 409, not silently re-processed.
+- **Address edits can't rewrite history.** The audit log stores the previous address side by side with the new one, and only unfulfilled orders can be edited.
+- **Refunds can't exceed what's refundable.** The cap is checked against the *cumulative* refunded total from Shopify (not the original price), line-item refunds are validated against the real order lines, and the full request payload is stored in the audit trail.
+- **Nothing auto-sends, ever.** Cancel, edit-address, and refund categories are on the never-auto-send list regardless of confidence, and the daily cost cap can force the whole system back into review mode.
+
+---
+
 ## Human control, by design
 
 - **Auto-send is off by default.** New installs run in review mode: the agent drafts, you approve.
 - **Refunds, complaints, and legal threats are hard-blocked from auto-sending** — the agent can flag them urgent, but a human sends the reply and approves the action.
 - **Every draft shows its confidence score and a review flag** in the dashboard, so you always know which replies the agent is sure about and which ones it wants you to check.
-- **Every action attempt is logged** — success or failure — so there's a full audit trail of what was proposed and what you approved.
+- **Every action attempt is logged** — success or failure — so there's a full audit trail of what was proposed and what you approved (`refund_audit`, `resend_audit`, and `action_audit` tables).
 
 ---
 
 ## Full results available on request
 
-The four cases above are from the most recent run of our 15-case suite: **15/15 passed (100%), with 100% correct classification** — including both adversarial prompt-injection cases. We re-run the full suite before every release and whenever a prompt changes.
+The four cases above are from the most recent full run of our suite: **15/15 passed (100%), with 100% correct classification** — including both adversarial prompt-injection cases. The suite now contains 19 golden cases, adding action-suggestion coverage (cancel before shipment, address typo, single-item refund, and a cancel request on an already-delivered order that must *not* propose a cancel). We re-run the full suite before every release and whenever a prompt changes.
 
 Ask us for the complete report and you'll get the dated JSON from the latest run, every case's input and output, and an explanation of what each test proves. Happy to run it live on a call as well.
 
 ---
 
-*Test run: 4 October 2026 · classifier_v1 / response_v1 · 15/15 passed · model: openai/gpt-4o-mini*
+*Test run: 4 October 2026 · classifier_v1 / response_v1 · 15/15 passed · model: openai/gpt-4o-mini · dataset: 19 cases (4 new action cases harness-verified)*

@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS refund_audit (
     status TEXT NOT NULL,           -- 'succeeded' or 'failed'
     shopify_response TEXT,
     error TEXT,
+    detail TEXT,                    -- JSON: e.g. refunded line items for partial refunds
     created_at TEXT NOT NULL
 );
 
@@ -71,6 +72,18 @@ CREATE TABLE IF NOT EXISTS resend_audit (
     idempotency_key TEXT PRIMARY KEY,
     ticket_id TEXT NOT NULL,
     order_id TEXT NOT NULL,
+    status TEXT NOT NULL,           -- 'succeeded' or 'failed'
+    shopify_response TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS action_audit (
+    idempotency_key TEXT PRIMARY KEY,
+    ticket_id TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    action TEXT NOT NULL,           -- 'cancel_order' or 'edit_address'
+    request_json TEXT NOT NULL,     -- what the human approved (reason, address, notify flags)
     status TEXT NOT NULL,           -- 'succeeded' or 'failed'
     shopify_response TEXT,
     error TEXT,
@@ -165,7 +178,7 @@ def storage_is_ephemeral(db_path: str | None = None) -> bool:
 
 class TicketStore:
     # Bump this when you add a migration. Each migration runs in order only once.
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
@@ -205,6 +218,7 @@ class TicketStore:
         migrations = {
             1: self._migrate_v1,
             2: self._migrate_v2,
+            3: self._migrate_v3,
         }
 
         for version in sorted(migrations.keys()):
@@ -239,6 +253,14 @@ class TicketStore:
     async def _migrate_v2(self, db):
         """v2: No-op placeholder. Add future migrations here."""
         pass
+
+    async def _migrate_v3(self, db):
+        """v3: refund_audit.detail — JSON blob for partial-refund line-item detail.
+        (action_audit is created by the _SCHEMA script on every boot, no ALTER needed.)"""
+        cursor = await db.execute("PRAGMA table_info(refund_audit)")
+        columns = [row[1] for row in await cursor.fetchall()]
+        if "detail" not in columns:
+            await db.execute("ALTER TABLE refund_audit ADD COLUMN detail TEXT")
 
     async def save(
         self,
@@ -517,6 +539,7 @@ class TicketStore:
                 if row["shopify_response"]
                 else None,
                 "error": row["error"],
+                "detail": json.loads(row["detail"]) if row["detail"] else None,
                 "created_at": row["created_at"],
             }
 
@@ -530,12 +553,13 @@ class TicketStore:
         status: str,
         shopify_response: dict[str, Any] | None = None,
         error: str | None = None,
+        detail: dict[str, Any] | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO refund_audit (idempotency_key, ticket_id, order_id, amount, reason, "
-                "status, shopify_response, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "status, shopify_response, error, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     idempotency_key,
                     ticket_id,
@@ -545,6 +569,7 @@ class TicketStore:
                     status,
                     json.dumps(shopify_response) if shopify_response else None,
                     error,
+                    json.dumps(detail) if detail else None,
                     now,
                 ),
             )
@@ -599,6 +624,62 @@ class TicketStore:
             )
             await db.commit()
 
+    async def get_action_audit(self, idempotency_key: str) -> dict[str, Any] | None:
+        """If this idempotency key was already processed, return the stored result instead
+        of letting the caller re-execute a real cancel / address edit."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM action_audit WHERE idempotency_key = ?", (idempotency_key,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "idempotency_key": row["idempotency_key"],
+                "ticket_id": row["ticket_id"],
+                "order_id": row["order_id"],
+                "action": row["action"],
+                "request": json.loads(row["request_json"]) if row["request_json"] else None,
+                "status": row["status"],
+                "shopify_response": json.loads(row["shopify_response"])
+                if row["shopify_response"]
+                else None,
+                "error": row["error"],
+                "created_at": row["created_at"],
+            }
+
+    async def record_action_audit(
+        self,
+        idempotency_key: str,
+        ticket_id: str,
+        order_id: str,
+        action: str,
+        request: dict[str, Any],
+        status: str,
+        shopify_response: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO action_audit (idempotency_key, ticket_id, order_id, action, "
+                "request_json, status, shopify_response, error, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    idempotency_key,
+                    ticket_id,
+                    order_id,
+                    action,
+                    json.dumps(request),
+                    status,
+                    json.dumps(shopify_response) if shopify_response else None,
+                    error,
+                    now,
+                ),
+            )
+            await db.commit()
+
     async def get_processed_webhook_event(
         self, event_id: str, source: str
     ) -> dict[str, Any] | None:
@@ -628,6 +709,32 @@ class TicketStore:
                 (event_id, source, now),
             )
             await db.commit()
+
+    async def get_category_edit_stats(self) -> dict[str, Any]:
+        """Per-category edit stats for auto-send calibration recommendations:
+        {category: {count, edited, edit_rate, samples: [(confidence, was_edited)]}}."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT category, confidence, was_edited FROM edit_records "
+                "WHERE category IS NOT NULL"
+            )
+            rows = await cursor.fetchall()
+
+        out: dict[str, Any] = {}
+        for row in rows:
+            entry = out.setdefault(row["category"], {"count": 0, "edited": 0, "samples": []})
+            entry["count"] += 1
+            was_edited = bool(row["was_edited"])
+            if was_edited:
+                entry["edited"] += 1
+            if row["confidence"] is not None:
+                entry["samples"].append((float(row["confidence"]), was_edited))
+        for entry in out.values():
+            entry["edit_rate"] = (
+                round(entry["edited"] / entry["count"], 3) if entry["count"] else None
+            )
+        return out
 
     async def get_calibration_report(self) -> dict[str, Any]:
         """Confidence calibration: buckets past AI drafts by their confidence score and shows

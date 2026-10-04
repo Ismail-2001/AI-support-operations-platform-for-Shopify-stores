@@ -11,7 +11,7 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-183%20Python%20%7C%2069%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
+[![Tests](https://img.shields.io/badge/Tests-228%20Python%20%7C%2080%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -49,7 +49,7 @@ Existing chatbot solutions fail because they **don't have access to your actual 
 - **Looks up real Shopify order data** — status, tracking, items, fulfillment
 - **Grounds replies in your policies** via RAG knowledge base
 - **Knows when to escalate** — 3rd follow-up = auto-escalate to urgent, human-only
-- **Suggests refunds/resends but NEVER executes them** — human-in-the-loop always
+- **Suggests refunds, cancellations, and address edits — but NEVER executes them** — human-in-the-loop always
 - **Tracks its own accuracy** — compares AI drafts vs what humans actually send
 
 > **"Set a junior support rep free for the price of a coffee. Deploy in 10 minutes, trust it in 2 weeks."**
@@ -79,13 +79,13 @@ One-click sync: `POST /support/knowledge-base/sync-shopify`
 ### Safety-First Design
 
 - **Confidence-gated auto-send** — below threshold = internal note for human review
-- **Money-moving actions are ALWAYS human-approved** — refunds/resends require explicit API call with Idempotency-Key
+- **Money-moving actions are ALWAYS human-approved** — refunds, resends, cancels, and address edits each require an explicit API call with `Idempotency-Key`
 - **Hard-coded blocked categories** — refund/complaint/legal never auto-send, even at 99% confidence
 - **Cost cap circuit breaker** — daily LLM spend limit force-disables auto-send
 - **PII redaction** — emails and phone numbers masked before LLM calls
 - **Webhook body size limit** — 1 MB cap prevents memory exhaustion
 
-> 🛡️ **Proven, not promised:** [sales/SAFETY_PROOF.md](sales/SAFETY_PROOF.md) walks through four real cases from the eval harness — prompt injection forcing a $500 refund, a knowledge-base gap, an angry customer, and an order-status lookup — with the agent's actual outputs. Full 15/15 eval report available on request.
+> 🛡️ **Proven, not promised:** [sales/SAFETY_PROOF.md](sales/SAFETY_PROOF.md) walks through four real cases from the eval harness — prompt injection forcing a $500 refund, a knowledge-base gap, an angry customer, and an order-status lookup — with the agent's actual outputs. The dataset now spans 19 golden cases (15/15 last full run; 4 new action-suggestion cases harness-verified).
 
 ### Self-Improvement Analytics
 
@@ -271,7 +271,7 @@ sequenceDiagram
 | **Runtime** | Python 3.12+ | Core application language |
 | **API Framework** | FastAPI 0.142 | Async REST + webhook endpoints |
 | **LLM Orchestration** | LangGraph 1.2 | State machine for agent pipeline |
-| **LLM Provider** | OpenRouter (gpt-4o-mini) | Primary — eval-validated (15/15) |
+| **LLM Provider** | OpenRouter (gpt-4o-mini) | Primary — eval-validated (19-case golden dataset) |
 | **LLM Secondary** | Groq (llama-3.3-70b) | Second in chain — re-run evals when switching |
 | **LLM Tertiary** | Google Gemini | Third in chain |
 | **LLM Fallback** | Claude Haiku | On primary exhaustion (optional, `ANTHROPIC_API_KEY`) |
@@ -281,7 +281,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 183 Python + 69 frontend tests |
+| **Testing** | Pytest + Vitest | 228 Python + 80 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -404,6 +404,8 @@ Dashboard: **http://localhost:5173**
 | `AUTO_SEND_MIN_CONFIDENCE` | `0.85` | Minimum confidence to auto-send |
 | `AUTO_SEND_BLOCKED_CATEGORIES` | `refund,complaint,legal,other` | Never auto-sent |
 | `DAILY_COST_CAP_USD` | `5.0` | Auto-send disabled when exceeded |
+| `AUTO_SEND_MIN_CONFIDENCE_<CATEGORY>` | per-category | Per-category threshold overrides (e.g. `..._RETURNS=0.87`, `..._ORDER_STATUS=0.88`); default `0.90`. Runtime overrides via `PUT /support/automation/thresholds`, floor `0.80` |
+| `ACTION_RATE_LIMIT_PER_MINUTE` | `10` | Rate limit on cancel/edit-address action endpoints |
 
 ### Security
 
@@ -430,6 +432,7 @@ Dashboard: **http://localhost:5173**
 | `POST` | `/support/tickets/{id}/messages` | Add follow-up message (same thread) | API Key |
 | `GET` | `/support/tickets/{id}/messages` | View full conversation thread | API Key |
 | `GET` | `/support/tickets/{id}/suggestion` | Re-fetch stored AI draft | API Key |
+| `GET` | `/support/tickets/{id}/order` | Linked order: line items, shipping address, refundable balance (for approval UI) | API Key |
 | `POST` | `/support/tickets/{id}/respond` | Send human (possibly edited) reply | API Key |
 
 ### Actions (Human-Approved Only)
@@ -438,6 +441,8 @@ Dashboard: **http://localhost:5173**
 |---|---|---|
 | `POST` | `/support/tickets/{id}/actions/refund` | Execute a real Shopify refund. Requires `Idempotency-Key` header. |
 | `POST` | `/support/tickets/{id}/actions/resend-order` | Create a replacement order in Shopify. Requires `Idempotency-Key` header. |
+| `POST` | `/support/tickets/{id}/actions/cancel` | Cancel an unfulfilled order (restocks inventory). Requires `Idempotency-Key`. 409 if already fulfilled/cancelled. |
+| `POST` | `/support/tickets/{id}/actions/edit-address` | Update shipping address before shipment. Requires `Idempotency-Key`. Audit stores old + new address. |
 
 ### Setup Wizard
 
@@ -472,6 +477,9 @@ Dashboard: **http://localhost:5173**
 | `GET` | `/support/analytics` | Volume + category/priority/sentiment breakdowns |
 | `GET` | `/support/analytics/quality` | Edit rate by category (self-improvement signal) |
 | `GET` | `/support/analytics/calibration` | Confidence calibration report |
+| `GET` | `/support/analytics/auto-send` | Per-category auto-send report: current vs suggested threshold, samples, edit rate |
+| `GET` | `/support/automation/thresholds` | Effective per-category thresholds (env + runtime overrides) |
+| `PUT` | `/support/automation/thresholds` | Set/clear a per-category runtime override (no redeploy; null clears) |
 | `GET` | `/support/analytics/costs` | Real LLM spend by day and stage |
 | `GET` | `/support/tickets/{id}/trace` | Full pipeline trace ("why did it say that?") |
 | `GET` | `/support/health` | Shopify/Gorgias connection status |
@@ -487,7 +495,7 @@ All errors follow a consistent format:
 }
 ```
 
-Error codes: `TICKET_NOT_FOUND`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `NO_ORDER_LINKED`, `REFUND_EXCEEDS_TOTAL`, `REFUND_FAILED`, `RESEND_FAILED`, `NO_GORGIAS_LINK`, `NOT_CONFIGURED`, `INTERNAL_SERVER_ERROR`.
+Error codes: `TICKET_NOT_FOUND`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `NO_ORDER_LINKED`, `REFUND_EXCEEDS_TOTAL`, `REFUND_FAILED`, `REFUND_LINE_ITEM_NOT_FOUND`, `REFUND_QUANTITY_EXCEEDS_ORDER`, `RESEND_FAILED`, `ORDER_ALREADY_CANCELLED`, `ORDER_ALREADY_FULFILLED`, `ORDER_CANNOT_CANCEL`, `CANCEL_FAILED`, `ADDRESS_UPDATE_REJECTED`, `EDIT_ADDRESS_FAILED`, `IDEMPOTENCY_KEY_CONFLICT`, `NO_GORGIAS_LINK`, `NOT_CONFIGURED`, `INTERNAL_SERVER_ERROR`.
 
 ---
 
@@ -501,9 +509,9 @@ Error codes: `TICKET_NOT_FOUND`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `NO_
 | **API Authentication** | All `/support/*` endpoints gated by `X-API-Key` | Constant-time comparison via `hmac.compare_digest` — no timing attack vector |
 | **Webhook Authentication** | Gorgias + generic inbound use shared secrets | Each channel has its own secret — sent as `X-Webhook-Secret` header |
 | **Rate Limiting** | Per-IP sliding window | 60/min default, 10/min on refund endpoint. Returns 429 when exceeded. Production keys on the real client from `X-Forwarded-For` (rightmost public IP), never the proxy IP. |
-| **Idempotency** | Refunds + resends require `Idempotency-Key` header | Same key = same response — double-clicks and retries never double-refund |
-| **Refund Cap** | Amount checked against real Shopify order total | Request over order total is rejected outright |
-| **Audit Trail** | Every action attempt logged | `refund_audit` + `resend_audit` tables — success/failure + raw Shopify response |
+| **Idempotency** | All four actions require `Idempotency-Key` header | Same key = same response — double-clicks and retries never double-execute. Key reuse across *different* actions = 409 `IDEMPOTENCY_KEY_CONFLICT` |
+| **Refund Cap** | Amount checked against *cumulative* refunded total | Over-cap rejected with `REFUND_EXCEEDS_TOTAL`; line-item refunds validated against real order lines |
+| **Audit Trail** | Every action attempt logged | `refund_audit` + `resend_audit` + `action_audit` tables — success/failure, request payload, raw Shopify response |
 | **PII Redaction** | Emails and phone numbers masked | Before any LLM call — never sent to external APIs |
 | **Prompt Injection Defense** | Code-level + prompt-level | Customer text labeled as untrusted data. Hard-coded gates (not prompt-based) for money-moving actions |
 | **Cost Circuit Breaker** | Daily cost cap auto-disables send | `DAILY_COST_CAP_USD` checked before every auto-send decision |
@@ -544,12 +552,12 @@ npm run test:watch    # Watch mode
 npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-69 tests across 9 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, and the Setup wizard (including the full finish → "You're ready" flow).
+80 tests across 11 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), and the two action-approval panels (cancel, edit address, partial refund with line-item scoping).
 
 ### Eval Harness
 
 ```bash
-# Run all 15 golden cases against your configured LLM
+# Run all 19 golden cases against your configured LLM
 python -m evals.run_evals
 
 # Run a single case
@@ -560,7 +568,7 @@ python -m evals.run_evals --json report.json
 python -m evals.compare evals/results/previous.json report.json
 ```
 
-The eval dataset includes **2 adversarial prompt-injection cases** that verify the model doesn't get tricked into confirming fake refunds or overriding confidence scores.
+The eval dataset includes **2 adversarial prompt-injection cases** that verify the model doesn't get tricked into confirming fake refunds or overriding confidence scores, plus 4 action-suggestion cases (cancel / edit address / partial refund / delivered-order-must-not-cancel) asserting the model proposes the right `expected_action_type` and never claims an action already happened.
 
 ### CI Pipeline
 
@@ -626,7 +634,7 @@ cs-agent/
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
-├── tests/                      # 183 unit/integration tests
+├── tests/                      # 228 unit/integration tests
 │   ├── conftest.py             # Fixtures: temp DB, FakeClassifier, FakeShopify
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests
@@ -746,6 +754,8 @@ cd dashboard && npm run dev                 # Dashboard
 | Dependency audit gates (pip-audit + npm audit in CI) | High | Done |
 | Production storage detection + disk config docs | High | Done |
 | Guided wizard UX pass (checklists, help panel, ready screen) | Medium | Done |
+| Human-approved cancel / edit-address / partial-refund actions | Critical | Done |
+| Per-category auto-send thresholds + calibration recommendations | High | Done |
 | Circuit breakers for Shopify/Gorgias | Critical | Planned |
 | Conversation windowing (token budget) | Critical | Planned |
 | Dead-letter queue + Slack alerts | High | Planned |

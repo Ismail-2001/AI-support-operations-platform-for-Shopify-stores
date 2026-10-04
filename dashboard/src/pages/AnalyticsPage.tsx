@@ -3,7 +3,7 @@ import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Tooltip, CartesianGri
 import { RefreshCw } from "lucide-react";
 import { api } from "../lib/api";
 import type { Connection } from "../lib/api";
-import type { CalibrationReport, CostReport, QualityStats, SupportAnalytics } from "../lib/types";
+import type { AutoSendReport, CalibrationReport, CostReport, QualityStats, SupportAnalytics } from "../lib/types";
 import { AnalyticsSkeleton } from "../components/Skeleton";
 import { useToast } from "../components/Toast";
 
@@ -31,26 +31,43 @@ export function AnalyticsPage({ connection }: { connection: Connection }) {
   const [quality, setQuality] = useState<QualityStats | null>(null);
   const [calibration, setCalibration] = useState<CalibrationReport | null>(null);
   const [costs, setCosts] = useState<CostReport | null>(null);
+  const [autoSend, setAutoSend] = useState<AutoSendReport | null>(null);
+  const [thresholdState, setThresholdState] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
 
   async function loadData() {
     setLoading(true);
     try {
-      const [o, q, c, co] = await Promise.all([
+      const [o, q, c, co, as] = await Promise.all([
         api.getAnalytics(connection),
         api.getQuality(connection),
         api.getCalibration(connection),
         api.getCosts(connection),
+        api.getAutoSendReport(connection),
       ]);
       setOverview(o);
       setQuality(q);
       setCalibration(c);
       setCosts(co);
+      setAutoSend(as);
     } catch {
       toast("error", "Failed to load analytics data");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function applyThreshold(category: string, value: number | null) {
+    setThresholdState(category);
+    try {
+      await api.updateThreshold(connection, category, value);
+      setAutoSend(await api.getAutoSendReport(connection));
+      toast("success", value == null ? `Reset ${category} threshold` : `Threshold for ${category} updated — applies to the next ticket`);
+    } catch {
+      toast("error", "Failed to update threshold");
+    } finally {
+      setThresholdState("");
     }
   }
 
@@ -142,6 +159,78 @@ export function AnalyticsPage({ connection }: { connection: Connection }) {
         )}
         {calibration?.sample_size_warning && (
           <p className="text-[11px] text-gold-700 dark:text-gold mt-2">{calibration.sample_size_warning}</p>
+        )}
+      </Section>
+
+      <Section title="Auto-send thresholds">
+        {!autoSend ? (
+          <p className="text-sm text-ink-400 dark:text-ink-dark-400">No threshold data yet.</p>
+        ) : (
+          <>
+            <p className="text-xs text-ink-600 dark:text-ink-dark-600 mb-4 leading-relaxed">
+              {autoSend.auto_send_enabled
+                ? "A reply only auto-sends when its confidence clears its category's floor. Suggestions appear after 50+ reviewed drafts per category and apply to the next ticket immediately — no restart. The daily cost cap ($"
+                : "Auto-send is currently off, so every reply waits for your approval regardless of thresholds. The daily cost cap ($"}
+              {autoSend.daily_cost_cap_usd.toFixed(2)}) stays active either way.
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-left font-mono text-[10px] uppercase tracking-[0.1em] text-ink-400 dark:text-ink-dark-400 border-b border-line dark:border-line-dark">
+                    <th className="pb-2 pr-3">Category</th>
+                    <th className="pb-2 pr-3">Current</th>
+                    <th className="pb-2 pr-3">Suggested</th>
+                    <th className="pb-2 pr-3">Samples</th>
+                    <th className="pb-2 pr-3">Edit rate</th>
+                    <th className="pb-2 pr-3">Why</th>
+                    <th className="pb-2" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(autoSend.categories).map(([category, c]) => {
+                    const differs = c.suggested_threshold !== c.current_threshold;
+                    const hasSamples = c.reviewed_samples >= autoSend.min_samples_for_recommendation;
+                    return (
+                      <tr key={category} className="border-b border-line/50 dark:border-line-dark/50 text-ink-700 dark:text-ink-dark-700">
+                        <td className="py-2.5 pr-3 font-medium">{category.replace("_", " ")}</td>
+                        <td className="py-2.5 pr-3 font-mono">{c.current_threshold.toFixed(2)}</td>
+                        <td className={`py-2.5 pr-3 font-mono ${differs && hasSamples ? "text-teal-700 dark:text-teal font-semibold" : "text-ink-400 dark:text-ink-dark-400"}`}>
+                          {c.suggested_threshold.toFixed(2)}
+                        </td>
+                        <td className="py-2.5 pr-3 font-mono">{c.reviewed_samples}</td>
+                        <td className="py-2.5 pr-3 font-mono">
+                          {c.edit_rate != null ? `${Math.round(c.edit_rate * 100)}%` : "–"}
+                        </td>
+                        <td className="py-2.5 pr-3 text-ink-500 dark:text-ink-dark-500 max-w-[22rem]">{c.recommendation}</td>
+                        <td className="py-2.5 text-right whitespace-nowrap">
+                          {differs && hasSamples && (
+                            <button
+                              onClick={() => applyThreshold(category, c.suggested_threshold)}
+                              disabled={thresholdState === category}
+                              className="text-[11px] px-2.5 py-1 rounded-lg bg-teal text-white font-medium hover:bg-teal-700 disabled:opacity-40 mr-1.5"
+                            >
+                              {thresholdState === category ? "…" : "Apply"}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => applyThreshold(category, null)}
+                            disabled={thresholdState === category}
+                            className="text-[11px] px-2.5 py-1 rounded-lg border border-line dark:border-line-dark text-ink-500 dark:text-ink-dark-500 hover:bg-ink-900/5 dark:hover:bg-white/5 disabled:opacity-40"
+                          >
+                            Reset
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[11px] text-ink-400 dark:text-ink-dark-400 mt-3">
+              Never auto-sent, regardless of threshold: {autoSend.blocked_categories.join(", ")} ·
+              absolute floor {autoSend.absolute_min_threshold.toFixed(2)}
+            </p>
+          </>
         )}
       </Section>
 

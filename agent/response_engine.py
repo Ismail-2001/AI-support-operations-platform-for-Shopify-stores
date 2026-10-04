@@ -7,6 +7,7 @@ customer experience, so the model is explicitly told to be skeptical of itself.
 """
 
 import time
+from typing import Any
 
 import structlog
 from pydantic import BaseModel, Field
@@ -56,6 +57,14 @@ Rules:
   "check with the team" if the customer wants a refund; only a human approves those. If a refund
   or replacement clearly seems warranted, set suggested_action with type="refund" or "resend_order",
   the order_id, your recommended amount, and a short reason — a human will review and approve it.
+- The customer may also ask you to CANCEL an unfulfilled order or CORRECT a shipping address
+  (typo, wrong apartment number, moved). Never claim you did it — instead set suggested_action
+  with type="cancel_order" or type="edit_address". For edit_address put the corrected fields in
+  `address` (address1, city, province/state, zip/postal code, country, name — use the field names
+  the customer actually said, normalized). A human reviews and approves these too. If the order
+  already shipped, don't suggest cancel/edit — explain the situation honestly instead.
+- For a partial refund (one item in a multi-item order, or a goodwill amount), set type="refund"
+  with the reduced `amount` — the human approves the final number anyway.
 - confidence should be LOW (below 0.6) if: order data is missing/ambiguous, the customer is very
   upset, the request involves money leaving the business (refund/discount), a policy question has
   no matching knowledge base content, or you are unsure the reply fully answers the question.
@@ -66,10 +75,15 @@ Rules:
 
 
 class _RawSuggestedAction(BaseModel):
-    type: str = Field(default="none", description="'refund', 'resend_order', or 'none'")
+    type: str = Field(
+        default="none",
+        description="'refund', 'resend_order', 'cancel_order', 'edit_address', or 'none'",
+    )
     order_id: str | None = None
     amount: float | None = None
     reason: str | None = None
+    address: dict[str, str] | None = None
+    refund_line_items: list[dict[str, Any]] | None = None
 
 
 class _RawSuggestion(BaseModel):
@@ -184,12 +198,29 @@ class ResponseGenerationEngine:
 
         suggested_action = None
         if has_action:
-            suggested_action = SuggestedAction(
-                type=ActionType(parsed.suggested_action.type),
-                order_id=parsed.suggested_action.order_id or ticket.order_id,
-                amount=parsed.suggested_action.amount,
-                reason=parsed.suggested_action.reason,
-            )
+            try:
+                action_type = ActionType(parsed.suggested_action.type)
+            except ValueError:
+                # Model invented an action type we don't support — drop the action,
+                # never silently map it onto a real money-moving one.
+                logger.warning(
+                    "unknown_suggested_action_type",
+                    ticket_id=ticket.id,
+                    raw_type=parsed.suggested_action.type,
+                )
+                action_type = ActionType.NONE
+            if action_type != ActionType.NONE:
+                suggested_action = SuggestedAction(
+                    type=action_type,
+                    order_id=parsed.suggested_action.order_id or ticket.order_id,
+                    amount=parsed.suggested_action.amount,
+                    reason=parsed.suggested_action.reason,
+                    address=parsed.suggested_action.address,
+                    refund_line_items=parsed.suggested_action.refund_line_items,
+                )
+                has_action = True
+            else:
+                has_action = False
 
         suggestion = ResponseSuggestion(
             ticket_id=ticket.id,

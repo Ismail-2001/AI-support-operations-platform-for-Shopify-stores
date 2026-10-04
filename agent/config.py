@@ -54,6 +54,8 @@ class Settings(BaseSettings):
     REFUND_RATE_LIMIT_PER_MINUTE: int = 10
     # stricter limit for the resend-order action endpoint specifically
     RESEND_RATE_LIMIT_PER_MINUTE: int = 10
+    # stricter limit for the cancel-order / edit-address action endpoints
+    ACTION_RATE_LIMIT_PER_MINUTE: int = 10
 
     # --- Automation policy ---
     AUTO_SEND_ENABLED: bool = False  # if False, every reply is a draft awaiting human approval
@@ -61,6 +63,16 @@ class Settings(BaseSettings):
     AUTO_SEND_BLOCKED_CATEGORIES: str = (
         "refund,complaint,legal,other"  # comma-separated, never auto-sent
     )
+    # Per-category confidence floors — the global AUTO_SEND_MIN_CONFIDENCE above is the
+    # fallback for categories not listed here. Tunable per tenant via .env, no code change.
+    # Calibration data (see /support/analytics/auto-send) suggests where to set these;
+    # they can also be overridden at runtime via PUT /support/automation/thresholds.
+    AUTO_SEND_MIN_CONFIDENCE_ORDER_STATUS: float = 0.88
+    AUTO_SEND_MIN_CONFIDENCE_SHIPPING: float = 0.88
+    AUTO_SEND_MIN_CONFIDENCE_PRODUCT_QUESTION: float = 0.90
+    AUTO_SEND_MIN_CONFIDENCE_RETURNS: float = 0.87
+    AUTO_SEND_MIN_CONFIDENCE_TECHNICAL: float = 0.90
+    AUTO_SEND_MIN_CONFIDENCE_DEFAULT: float = 0.90
 
     # --- Cost governance ---
     # When today's LLM spend crosses this, auto-send is force-disabled (tickets still get

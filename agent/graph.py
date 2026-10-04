@@ -15,6 +15,7 @@ from typing import Any, TypedDict
 import structlog
 from langgraph.graph import END, START, StateGraph
 
+from agent.automation import get_min_confidence
 from agent.config import settings
 from agent.models import (
     ClassificationResult,
@@ -175,7 +176,10 @@ def build_agent_graph(classifier, response_engine, shopify):
             return {"auto_sent": False}
         if suggestion.requires_human_review:
             return {"auto_sent": False}
-        if suggestion.confidence < settings.AUTO_SEND_MIN_CONFIDENCE:
+        # Per-category confidence floor: .env default, runtime override via
+        # PUT /support/automation/thresholds (agent.automation.get_min_confidence).
+        min_confidence = await get_min_confidence(classification.category.value)
+        if suggestion.confidence < min_confidence:
             return {"auto_sent": False}
         if suggestion.suggested_action and suggestion.suggested_action.type.value != "none":
             return {"auto_sent": False}

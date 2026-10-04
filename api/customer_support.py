@@ -9,7 +9,7 @@ from typing import Any
 
 import structlog
 from fastapi import APIRouter, Depends, Header, Query, Request
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 
 from agent.auth import check_shared_secret, verify_api_key
 from agent.config import settings
@@ -20,7 +20,12 @@ from agent.models import (
     SupportTicket,
     TicketChannel,
 )
-from agent.rate_limit import rate_limit_default, rate_limit_refund, rate_limit_resend
+from agent.rate_limit import (
+    rate_limit_action,
+    rate_limit_default,
+    rate_limit_refund,
+    rate_limit_resend,
+)
 from agent.storage import storage_is_ephemeral, store
 from agent.support_agent import CustomerSupportAgent
 from api.errors import (
@@ -294,10 +299,24 @@ async def respond_to_ticket(ticket_id: str, req: ResponseRequest):
 # ── Actions (human-approved, money/fulfillment-moving) ──────
 
 
+class RefundLineItem(BaseModel):
+    line_item_id: int
+    quantity: int = Field(ge=1)
+
+    @field_validator("line_item_id")
+    @classmethod
+    def _positive_id(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("line_item_id must be positive")
+        return v
+
+
 class RefundActionRequest(BaseModel):
     amount: float
     reason: str = "Approved by support team"
     notify_customer: bool = True
+    # Optional: scope the refund to specific line items (partial / item-level refund).
+    refund_line_items: list[RefundLineItem] | None = None
 
 
 @router.post("/tickets/{ticket_id}/actions/refund", dependencies=[Depends(rate_limit_refund)])
@@ -308,17 +327,17 @@ async def approve_refund(
 ):
     """Executes a REAL refund on the linked Shopify order. This endpoint is never called
     automatically by the agent — auto-send is hard-blocked whenever a suggested_action is
-    present (see support_agent._should_auto_send). A human always calls this explicitly,
+    present (see agent/graph.py decide_auto_send). A human always calls this explicitly,
     e.g. by clicking 'Approve refund' on the AI's suggested_action in your dashboard.
 
     Requires an `Idempotency-Key` header (e.g. a UUID your dashboard generates once per
     click). If the same key is sent twice — a retried request, a double-click, a network
     retry — the second call returns the FIRST call's result instead of refunding twice.
 
-    The requested amount is capped at the order's total_price. This does not track
-    cumulative prior partial refunds on the same order — for a client doing partial
-    refunds regularly, extend this check to subtract already-refunded amounts (Shopify's
-    order object includes a `refunds` array you can sum)."""
+    The requested amount is capped at the order's total_price MINUS amounts already
+    refunded on this order (Shopify's `total_refunded` / `refunds` array) — repeated
+    partial refunds can never drain more than the order was worth. Optionally pass
+    `refund_line_items` to scope the refund to specific items for partial refunds."""
     existing = await store.get_refund_audit(idempotency_key)
     if existing:
         logger.info(
@@ -354,21 +373,73 @@ async def approve_refund(
         raise_not_found("order", order_id)
 
     order_total = float(order.get("total_price", 0))
-    if req.amount > order_total:
+    try:
+        already_refunded = float(order.get("total_refunded") or 0)
+    except (TypeError, ValueError):
+        already_refunded = 0.0
+    if not already_refunded:
+        already_refunded = sum(
+            float(t.get("amount", 0) or 0)
+            for r in order.get("refunds") or []
+            for t in r.get("transactions") or []
+        )
+    refundable = max(order_total - already_refunded, 0.0)
+    if req.amount > refundable:
         raise APIError(
             code="REFUND_EXCEEDS_TOTAL",
-            message=f"Refund amount {req.amount} exceeds order total {order_total} — refusing to process",
+            message=(
+                f"Refund amount {req.amount} exceeds remaining refundable {refundable:.2f} "
+                f"(order total {order_total} minus {already_refunded:.2f} already refunded) "
+                f"— refusing to process"
+            ),
             status=400,
-            details={"amount": req.amount, "order_total": order_total},
+            details={
+                "amount": req.amount,
+                "order_total": order_total,
+                "already_refunded": already_refunded,
+                "refundable": refundable,
+            },
         )
 
+    shopify_line_items = None
+    if req.refund_line_items:
+        order_items = {li.get("id"): li for li in order.get("line_items", [])}
+        shopify_line_items = []
+        for rli in req.refund_line_items:
+            li = order_items.get(rli.line_item_id)
+            if not li:
+                raise APIError(
+                    code="REFUND_LINE_ITEM_NOT_FOUND",
+                    message=f"Line item {rli.line_item_id} is not on order {order_id}",
+                    status=400,
+                    details={"line_item_id": rli.line_item_id, "order_id": order_id},
+                )
+            if rli.quantity > int(li.get("quantity", 0)):
+                raise APIError(
+                    code="REFUND_QUANTITY_EXCEEDS_ORDER",
+                    message=(
+                        f"Refund quantity {rli.quantity} exceeds ordered quantity "
+                        f"{li.get('quantity')} for {li.get('title', rli.line_item_id)}"
+                    ),
+                    status=400,
+                    details={"line_item_id": rli.line_item_id, "quantity": rli.quantity},
+                )
+            shopify_line_items.append({"id": rli.line_item_id, "quantity": rli.quantity})
+
+    refund_detail: dict[str, Any] | None = None
+    if req.refund_line_items:
+        refund_detail = {"line_items": [rli.model_dump() for rli in req.refund_line_items]}
+
     try:
-        result = await _agent.shopify.create_refund(
-            order_id=order_id,
-            amount=req.amount,
-            reason=req.reason,
-            notify_customer=req.notify_customer,
-        )
+        refund_kwargs: dict[str, Any] = {
+            "order_id": order_id,
+            "amount": req.amount,
+            "reason": req.reason,
+            "notify_customer": req.notify_customer,
+        }
+        if shopify_line_items is not None:
+            refund_kwargs["refund_line_items"] = shopify_line_items
+        result = await _agent.shopify.create_refund(**refund_kwargs)
     except Exception as e:
         logger.error("refund_failed", ticket_id=ticket_id, order_id=order_id, error=str(e))
         await store.record_refund_audit(
@@ -379,6 +450,7 @@ async def approve_refund(
             req.reason,
             status="failed",
             error=str(e),
+            detail=refund_detail,
         )
         raise APIError(code="REFUND_FAILED", message=f"Refund failed: {e}", status=502) from e
 
@@ -390,6 +462,7 @@ async def approve_refund(
         req.reason,
         status="succeeded",
         shopify_response=result,
+        detail=refund_detail,
     )
     await store.add_message(
         ticket_id,
@@ -478,6 +551,365 @@ async def approve_resend_order(
     await store.update_status(ticket_id, status="resolved")
     logger.info("resend_approved_and_processed", ticket_id=ticket_id, order_id=order_id)
     return {"ticket_id": ticket_id, "order_id": order_id, "resend": result, "replayed": False}
+
+
+@router.get("/tickets/{ticket_id}/order")
+async def get_ticket_order(ticket_id: str):
+    """The Shopify order linked to this ticket, trimmed to what the dashboard needs for
+    approval previews: current shipping address (before an address edit), fulfillment +
+    cancellation state (before a cancel), line items + refund history (before a partial
+    refund). Read-only — executing any action still requires the /actions/* endpoints."""
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+    order_id = row["ticket"].get("order_id")
+    if not order_id:
+        raise APIError(
+            code="NO_ORDER_LINKED",
+            message="Ticket has no linked order_id — look up the order first",
+            status=400,
+        )
+    try:
+        order = await _agent.shopify.get_order_by_id(order_id)
+    except ShopifyNotConfigured:
+        raise_not_configured("Shopify")
+    if not order:
+        raise_not_found("order", order_id)
+
+    already_refunded = float(order.get("total_refunded") or 0)
+    if not already_refunded:
+        already_refunded = sum(
+            float(t.get("amount", 0) or 0)
+            for r in order.get("refunds") or []
+            for t in r.get("transactions") or []
+        )
+    order_total = float(order.get("total_price", 0))
+    return {
+        "ticket_id": ticket_id,
+        "order_id": order_id,
+        "order_name": order.get("name"),
+        "total_price": order_total,
+        "currency": order.get("currency"),
+        "financial_status": order.get("financial_status"),
+        "fulfillment_status": order.get("fulfillment_status"),
+        "cancelled_at": order.get("cancelled_at"),
+        "shipping_address": order.get("shipping_address") or {},
+        "line_items": [
+            {
+                "id": li.get("id"),
+                "title": li.get("title"),
+                "variant_title": li.get("variant_title"),
+                "quantity": li.get("quantity"),
+                "price": li.get("price"),
+            }
+            for li in order.get("line_items", [])
+        ],
+        "already_refunded": already_refunded,
+        "refundable": max(order_total - already_refunded, 0.0),
+    }
+
+
+class CancelOrderActionRequest(BaseModel):
+    reason: str = "Requested by customer"
+    notify_customer: bool = True
+
+
+@router.post("/tickets/{ticket_id}/actions/cancel", dependencies=[Depends(rate_limit_action)])
+async def approve_cancel_order(
+    ticket_id: str,
+    req: CancelOrderActionRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """Cancels the linked Shopify order (and restocks inventory). Never called automatically —
+    a human always calls this explicitly, e.g. by clicking 'Approve cancel' on the AI's
+    suggested_action in your dashboard.
+
+    Requires an `Idempotency-Key` header. If the same key is sent twice, the second call
+    returns the FIRST call's result instead of cancelling twice.
+
+    Guards: the order must exist, must not already be cancelled, and must not be fulfilled
+    (a shipped package is not cancellable — the customer needs a return/refund instead)."""
+    existing = await store.get_action_audit(idempotency_key)
+    if existing and existing["action"] != "cancel_order":
+        raise APIError(
+            code="IDEMPOTENCY_KEY_CONFLICT",
+            message=f"Idempotency-Key was already used for a different action "
+            f"('{existing['action']}') — generate a new key",
+            status=409,
+        )
+    if existing and existing["action"] == "cancel_order":
+        logger.info(
+            "cancel_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
+        )
+        return {
+            "ticket_id": existing["ticket_id"],
+            "order_id": existing["order_id"],
+            "cancel": existing["shopify_response"],
+            "replayed": True,
+        }
+
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+    order_id = row["ticket"].get("order_id")
+    if not order_id:
+        raise APIError(
+            code="NO_ORDER_LINKED",
+            message="Ticket has no linked order_id — look up the order first",
+            status=400,
+        )
+
+    try:
+        order = await _agent.shopify.get_order_by_id(order_id)
+    except ShopifyNotConfigured:
+        raise_not_configured("Shopify")
+
+    if not order:
+        raise_not_found("order", order_id)
+
+    if order.get("cancelled_at"):
+        raise APIError(
+            code="ORDER_ALREADY_CANCELLED",
+            message=f"Order {order_id} was already cancelled — nothing to do",
+            status=409,
+            details={"cancelled_at": order["cancelled_at"]},
+        )
+    fulfillment_status = order.get("fulfillment_status")
+    if fulfillment_status and fulfillment_status != "unfulfilled":
+        raise APIError(
+            code="ORDER_ALREADY_FULFILLED",
+            message=(
+                f"Order {order_id} is '{fulfillment_status}' — a shipped order cannot be "
+                f"cancelled; offer a return or refund instead"
+            ),
+            status=409,
+            details={"fulfillment_status": fulfillment_status},
+        )
+
+    try:
+        result = await _agent.shopify.cancel_order(
+            order_id=order_id, reason=req.reason, notify_customer=req.notify_customer
+        )
+    except ShopifyNotConfigured:
+        raise_not_configured("Shopify")
+    except ValueError as e:
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            "cancel_order",
+            req.model_dump(),
+            status="failed",
+            error=str(e),
+        )
+        raise APIError(code="ORDER_CANNOT_CANCEL", message=str(e), status=409) from e
+    except Exception as e:
+        logger.error("cancel_failed", ticket_id=ticket_id, order_id=order_id, error=str(e))
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            "cancel_order",
+            req.model_dump(),
+            status="failed",
+            error=str(e),
+        )
+        raise APIError(code="CANCEL_FAILED", message=f"Cancel failed: {e}", status=502) from e
+
+    await store.record_action_audit(
+        idempotency_key,
+        ticket_id,
+        order_id,
+        "cancel_order",
+        req.model_dump(),
+        status="succeeded",
+        shopify_response=result,
+    )
+    await store.add_message(
+        ticket_id,
+        MessageSender.AGENT.value,
+        f"[Action taken] Order cancelled. Reason: {req.reason}",
+    )
+    await store.update_status(ticket_id, status="resolved")
+    logger.info(
+        "cancel_approved_and_processed", ticket_id=ticket_id, order_id=order_id, reason=req.reason
+    )
+    return {"ticket_id": ticket_id, "order_id": order_id, "cancel": result, "replayed": False}
+
+
+class EditAddressActionRequest(BaseModel):
+    address: dict[str, str]
+    reason: str = "Customer requested address correction"
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, v: dict[str, str]) -> dict[str, str]:
+        required = ("address1", "city", "country", "zip")
+        missing = [f for f in required if not (v.get(f) or "").strip()]
+        if missing:
+            raise ValueError(
+                f"address is missing required fields: {', '.join(missing)} "
+                f"(need address1, city, country, zip)"
+            )
+        return {k: val.strip() for k, val in v.items() if isinstance(val, str)}
+
+
+@router.post("/tickets/{ticket_id}/actions/edit-address", dependencies=[Depends(rate_limit_action)])
+async def approve_edit_address(
+    ticket_id: str,
+    req: EditAddressActionRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """Updates the shipping address on the linked Shopify order. Never called automatically —
+    a human always calls this explicitly, e.g. by clicking 'Approve address change' on the
+    AI's suggested_action in your dashboard.
+
+    Requires an `Idempotency-Key` header. If the same key is sent twice, the second call
+    returns the FIRST call's result instead of editing twice.
+
+    Guards: only unfulfilled/unshipped, non-cancelled orders can be edited — changing the
+    address of a package already in transit would silently send it to the wrong place.
+    The audit record stores BOTH the previous and the new address for the trail."""
+    existing = await store.get_action_audit(idempotency_key)
+    if existing and existing["action"] != "edit_address":
+        raise APIError(
+            code="IDEMPOTENCY_KEY_CONFLICT",
+            message=f"Idempotency-Key was already used for a different action "
+            f"('{existing['action']}') — generate a new key",
+            status=409,
+        )
+    if existing and existing["action"] == "edit_address":
+        logger.info(
+            "edit_address_idempotent_replay",
+            idempotency_key=idempotency_key,
+            ticket_id=ticket_id,
+        )
+        return {
+            "ticket_id": existing["ticket_id"],
+            "order_id": existing["order_id"],
+            "request": existing["request"],
+            "order": existing["shopify_response"],
+            "replayed": True,
+        }
+
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+    order_id = row["ticket"].get("order_id")
+    if not order_id:
+        raise APIError(
+            code="NO_ORDER_LINKED",
+            message="Ticket has no linked order_id — look up the order first",
+            status=400,
+        )
+
+    try:
+        order = await _agent.shopify.get_order_by_id(order_id)
+    except ShopifyNotConfigured:
+        raise_not_configured("Shopify")
+
+    if not order:
+        raise_not_found("order", order_id)
+
+    if order.get("cancelled_at"):
+        raise APIError(
+            code="ORDER_CANCELLED",
+            message=f"Order {order_id} is cancelled — its address cannot be changed",
+            status=409,
+            details={"cancelled_at": order["cancelled_at"]},
+        )
+    fulfillment_status = order.get("fulfillment_status")
+    if fulfillment_status and fulfillment_status not in ("unfulfilled", "partial"):
+        raise APIError(
+            code="ORDER_ALREADY_FULFILLED",
+            message=(
+                f"Order {order_id} is '{fulfillment_status}' — the address can only be "
+                f"edited before it ships"
+            ),
+            status=409,
+            details={"fulfillment_status": fulfillment_status},
+        )
+
+    previous_address = order.get("shipping_address") or {}
+    audit_request = {**req.model_dump(), "previous_address": previous_address}
+
+    try:
+        result = await _agent.shopify.update_shipping_address(order_id, req.address)
+    except ShopifyNotConfigured:
+        raise_not_configured("Shopify")
+    except ValueError as e:
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            "edit_address",
+            audit_request,
+            status="failed",
+            error=str(e),
+        )
+        raise APIError(code="ADDRESS_UPDATE_REJECTED", message=str(e), status=409) from e
+    except Exception as e:
+        logger.error("edit_address_failed", ticket_id=ticket_id, order_id=order_id, error=str(e))
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            "edit_address",
+            audit_request,
+            status="failed",
+            error=str(e),
+        )
+        raise APIError(
+            code="EDIT_ADDRESS_FAILED", message=f"Address update failed: {e}", status=502
+        ) from e
+
+    await store.record_action_audit(
+        idempotency_key,
+        ticket_id,
+        order_id,
+        "edit_address",
+        audit_request,
+        status="succeeded",
+        shopify_response=result,
+    )
+    new_line = ", ".join(
+        filter(
+            None,
+            [
+                req.address.get("address1"),
+                req.address.get("city"),
+                req.address.get("zip"),
+                req.address.get("country"),
+            ],
+        )
+    )
+    old_line = ", ".join(
+        filter(
+            None,
+            [
+                previous_address.get("address1"),
+                previous_address.get("city"),
+                previous_address.get("zip"),
+                previous_address.get("country"),
+            ],
+        )
+    )
+    await store.add_message(
+        ticket_id,
+        MessageSender.AGENT.value,
+        f"[Action taken] Shipping address updated from [{old_line or 'unknown'}] to "
+        f"[{new_line}]. Reason: {req.reason}",
+    )
+    await store.update_status(ticket_id, status="resolved")
+    logger.info("edit_address_approved_and_processed", ticket_id=ticket_id, order_id=order_id)
+    return {
+        "ticket_id": ticket_id,
+        "order_id": order_id,
+        "previous_address": previous_address,
+        "address": req.address,
+        "order": result,
+        "replayed": False,
+    }
 
 
 # ── Knowledge Base (RAG) ─────────────────────────────────────
@@ -775,6 +1207,75 @@ async def get_calibration_report():
     drop as confidence rises, AUTO_SEND_MIN_CONFIDENCE is not doing what you think it's doing —
     raise it, or don't trust auto-send for that category yet."""
     return await store.get_calibration_report()
+
+
+@router.get("/analytics/auto-send")
+async def get_auto_send_analytics():
+    """Per-category auto-send thresholds: the current floor, the floor recommended from real
+    human edit behavior (50+ reviewed samples per category), and why. Blocked categories
+    (refund/complaint/legal/other) are listed separately — they never auto-send, threshold
+    or not. Apply a suggestion via PUT /support/automation/thresholds."""
+    from agent.automation import get_auto_send_report
+
+    return await get_auto_send_report()
+
+
+class ThresholdUpdateRequest(BaseModel):
+    category: str
+    min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+
+@router.get("/automation/thresholds")
+async def list_automation_thresholds():
+    """Current auto-send confidence floor per category, plus where each value came from
+    (runtime override vs .env). These are read on every ticket — changes apply immediately,
+    no restart."""
+    from agent.automation import get_thresholds
+
+    return {"thresholds": await get_thresholds()}
+
+
+@router.put("/automation/thresholds")
+async def update_automation_threshold(req: ThresholdUpdateRequest):
+    """Set (or clear, with min_confidence=null) the runtime auto-send confidence floor for
+    one category. Only auto-sendable categories accept thresholds — refund/complaint/legal/
+    other are hard-blocked in code regardless of any value set here. A daily cost cap stays
+    active independently: thresholds never disable it."""
+    from agent.automation import (
+        AUTO_SENDABLE_CATEGORIES,
+        _kv_delete,
+        set_min_confidence,
+        threshold_kv_key,
+    )
+
+    if req.category not in AUTO_SENDABLE_CATEGORIES:
+        raise_unprocessable(
+            f"'{req.category}' is not auto-sendable — thresholds only apply to: "
+            f"{', '.join(AUTO_SENDABLE_CATEGORIES)}"
+        )
+    if req.min_confidence is None:
+        await _kv_delete(threshold_kv_key(req.category))
+        logger.info("threshold_override_cleared", category=req.category)
+        source = "settings"
+        effective = None
+    else:
+        try:
+            await set_min_confidence(req.category, req.min_confidence)
+        except ValueError as e:
+            raise_unprocessable(str(e))
+        source = "runtime_override"
+        effective = req.min_confidence
+
+    from agent.automation import get_thresholds
+
+    for entry in await get_thresholds():
+        if entry["category"] == req.category:
+            return {
+                "category": req.category,
+                "min_confidence": entry["min_confidence"],
+                "source": source if effective is not None else entry["source"],
+            }
+    raise_unprocessable(f"unknown category '{req.category}'")
 
 
 @router.get("/analytics/costs")

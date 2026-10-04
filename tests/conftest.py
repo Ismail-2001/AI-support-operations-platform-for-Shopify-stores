@@ -56,11 +56,18 @@ def reset_settings():
     settings.AUTO_SEND_ENABLED = False
     settings.AUTO_SEND_MIN_CONFIDENCE = 0.85
     settings.AUTO_SEND_BLOCKED_CATEGORIES = "refund,complaint,legal,other"
+    settings.AUTO_SEND_MIN_CONFIDENCE_ORDER_STATUS = 0.88
+    settings.AUTO_SEND_MIN_CONFIDENCE_SHIPPING = 0.88
+    settings.AUTO_SEND_MIN_CONFIDENCE_PRODUCT_QUESTION = 0.90
+    settings.AUTO_SEND_MIN_CONFIDENCE_RETURNS = 0.87
+    settings.AUTO_SEND_MIN_CONFIDENCE_TECHNICAL = 0.90
+    settings.AUTO_SEND_MIN_CONFIDENCE_DEFAULT = 0.90
     settings.REQUIRE_API_KEY = False
     settings.API_KEY = None
     settings.RATE_LIMIT_PER_MINUTE = 60
     settings.REFUND_RATE_LIMIT_PER_MINUTE = 10
     settings.RESEND_RATE_LIMIT_PER_MINUTE = 10
+    settings.ACTION_RATE_LIMIT_PER_MINUTE = 10
     settings.DAILY_COST_CAP_USD = 5.0
     settings.ENV = "development"
     yield

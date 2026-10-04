@@ -158,11 +158,20 @@ class ShopifyClient:
         **_EXP_BACKOFF,
     )
     async def create_refund(
-        self, order_id: str, amount: float, reason: str = "", notify_customer: bool = True
+        self,
+        order_id: str,
+        amount: float,
+        reason: str = "",
+        notify_customer: bool = True,
+        refund_line_items: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """Creates a monetary refund on an order. ALWAYS call this only after explicit human
         approval — see api/customer_support.py POST /tickets/{id}/actions/refund. This method
-        itself does not gate on anything; the safety gate lives at the API layer."""
+        itself does not gate on anything; the safety gate lives at the API layer.
+
+        `refund_line_items` optionally scopes the refund to specific line items
+        ([{"id": <line_item id>, "quantity": 2}]) for partial / item-level refunds.
+        When omitted, the full amount is refunded as a plain monetary refund."""
         if not self.enabled:
             raise ShopifyNotConfigured("Shopify credentials not set in .env")
 
@@ -194,11 +203,98 @@ class ShopifyClient:
                     ],
                 }
             }
+            if refund_line_items:
+                payload["refund"]["refund_line_items"] = refund_line_items
             resp = await client.post(
                 f"{self.base_url}/orders/{order_id}/refunds.json",
                 headers=self.headers,
                 json=payload,
             )
+            resp.raise_for_status()
+            return resp.json()
+
+    @retry(
+        retry=retry_if_exception(_is_timeout_or_connection_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def cancel_order(
+        self, order_id: str, reason: str = "", notify_customer: bool = True
+    ) -> dict[str, Any]:
+        """Cancels an unfulfilled order (and restocks its inventory). ALWAYS call this only
+        after explicit human approval — see api/customer_support.py POST /tickets/{id}/actions/cancel.
+        Strict retry (timeout/connection only): a 5xx may mean Shopify already processed the
+        cancellation, so we never blindly retry — same policy as create_refund."""
+        if not self.enabled:
+            raise ShopifyNotConfigured("Shopify credentials not set in .env")
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            # Shopify's cancel reason is a fixed set — map free-text human reasons
+            # to the closest valid value (our own audit table keeps the exact reason).
+            valid_reasons = {"customer", "fraud", "inventory", "declined", "other"}
+            payload = {
+                "cancel": {
+                    "reason": reason if reason in valid_reasons else "customer",
+                    "notify": notify_customer,
+                    "restock": True,
+                }
+            }
+            resp = await client.post(
+                f"{self.base_url}/orders/{order_id}/cancel.json",
+                headers=self.headers,
+                json=payload,
+            )
+            if resp.status_code == 404:
+                raise ValueError(f"Order {order_id} not found in Shopify")
+            if resp.status_code == 422:
+                # Shopify rejects cancelling an already-cancelled order — surface the
+                # reason so the API layer can translate it into a clear 409.
+                detail = resp.json().get("errors", resp.text)
+                raise ValueError(f"Order {order_id} cannot be cancelled: {detail}")
+            resp.raise_for_status()
+            return resp.json()
+
+    @retry(
+        retry=retry_if_exception(_is_timeout_or_connection_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def update_shipping_address(
+        self, order_id: str, address: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Updates the shipping address on an UNFULFILLED order. ALWAYS call this only after
+        explicit human approval — see api/customer_support.py POST /tickets/{id}/actions/edit-address.
+        Refuses to touch orders that are already fulfilled or cancelled — editing an address
+        after the package shipped would silently send it to the wrong place."""
+        if not self.enabled:
+            raise ShopifyNotConfigured("Shopify credentials not set in .env")
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            order_resp = await client.get(
+                f"{self.base_url}/orders/{order_id}.json", headers=self.headers
+            )
+            if order_resp.status_code == 404:
+                raise ValueError(f"Order {order_id} not found in Shopify")
+            order_resp.raise_for_status()
+            order = order_resp.json().get("order", {})
+
+            if order.get("cancelled_at"):
+                raise ValueError(f"Order {order_id} is cancelled — address cannot be changed")
+            fulfillment_status = order.get("fulfillment_status")
+            if fulfillment_status and fulfillment_status not in ("unfulfilled", "partial"):
+                raise ValueError(
+                    f"Order {order_id} is '{fulfillment_status}' — address can only be edited "
+                    f"before it ships"
+                )
+
+            resp = await client.put(
+                f"{self.base_url}/orders/{order_id}.json",
+                headers=self.headers,
+                json={"order": {"id": order_id, "shipping_address": address}},
+            )
+            if resp.status_code == 422:
+                detail = resp.json().get("errors", resp.text)
+                raise ValueError(f"Shopify rejected the address update: {detail}")
             resp.raise_for_status()
             return resp.json()
 

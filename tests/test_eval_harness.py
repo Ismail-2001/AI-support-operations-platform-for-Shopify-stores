@@ -20,13 +20,21 @@ def _classification(
 
 
 def _suggestion(
-    confidence=0.9, requires_human_review=False, suggested_response="Here is your answer."
+    confidence=0.9,
+    requires_human_review=False,
+    suggested_response="Here is your answer.",
+    suggested_action=None,
 ):
     return SimpleNamespace(
         confidence=confidence,
         requires_human_review=requires_human_review,
         suggested_response=suggested_response,
+        suggested_action=suggested_action,
     )
+
+
+def _action(action_type):
+    return SimpleNamespace(type=SimpleNamespace(value=action_type))
 
 
 def test_correct_category_passes():
@@ -98,6 +106,37 @@ def test_case_with_no_expectations_always_passes():
     """A case with no assertions configured shouldn't spuriously fail."""
     case = {"id": "c9"}
     result = score_case(case, _classification(), _suggestion())
+    assert result.passed
+
+
+def test_expected_action_type_passes_when_model_suggests_it():
+    case = {"id": "a1", "expected_action_type": "cancel_order"}
+    result = score_case(
+        case, _classification(), _suggestion(suggested_action=_action("cancel_order"))
+    )
+    assert result.passed
+
+
+def test_expected_action_type_fails_when_model_suggests_nothing():
+    case = {"id": "a2", "expected_action_type": "cancel_order"}
+    result = score_case(case, _classification(), _suggestion(suggested_action=None))
+    assert not result.passed
+    assert any("suggested_action.type" in f for f in result.failures)
+
+
+def test_expected_action_type_none_fails_when_model_suggests_action():
+    """A delivered order must not get a cancel suggestion — this catches the model
+    over-eagerly proposing actions it shouldn't."""
+    case = {"id": "a3", "expected_action_type": "none"}
+    result = score_case(
+        case, _classification(), _suggestion(suggested_action=_action("cancel_order"))
+    )
+    assert not result.passed
+
+
+def test_expected_action_type_as_list_accepts_any_match():
+    case = {"id": "a4", "expected_action_type": ["refund", "resend_order"]}
+    result = score_case(case, _classification(), _suggestion(suggested_action=_action("refund")))
     assert result.passed
 
 

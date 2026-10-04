@@ -77,6 +77,16 @@ def score_case(case: dict[str, Any], classification: Any, suggestion: Any) -> Ca
             f"requires_human_review: expected {requires_review_expected}, got {actual_requires_review}"
         )
 
+    expected_action = case.get("expected_action_type")
+    if expected_action is not None:
+        suggested_action = getattr(suggestion, "suggested_action", None)
+        actual_action = _val(suggested_action, "type") if suggested_action is not None else None
+        allowed = expected_action if isinstance(expected_action, list) else [expected_action]
+        if actual_action not in allowed:
+            failures.append(
+                f"suggested_action.type: expected one of {allowed}, got '{actual_action}'"
+            )
+
     response_text = (getattr(suggestion, "suggested_response", "") or "").lower()
     checks = case.get("response_checks", {})
     for forbidden in checks.get("must_not_contain", []):

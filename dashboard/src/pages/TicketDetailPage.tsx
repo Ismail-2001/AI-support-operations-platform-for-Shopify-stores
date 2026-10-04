@@ -6,6 +6,7 @@ import type { TicketMessage, TicketWithSuggestion, TraceEntry } from "../lib/typ
 import { CategoryBadge, PriorityBadge, SentimentBadge, SenderBadge } from "../components/Badges";
 import { ConfidenceBar } from "../components/ConfidenceBar";
 import { RefundApprovalPanel } from "../components/RefundApprovalPanel";
+import { ActionApprovalPanel } from "../components/ActionApprovalPanel";
 import { TraceViewer } from "../components/TraceViewer";
 import { CustomerInfoPanel } from "../components/CustomerInfoPanel";
 import { TicketDetailSkeleton } from "../components/Skeleton";
@@ -169,14 +170,24 @@ export function TicketDetailPage({ connection, ticketId, onBack }: { connection:
             </div>
           )}
 
-          {ticket.suggestion?.suggested_action && ticket.suggestion.suggested_action.type !== "none" && (
-            <RefundApprovalPanel
-              connection={connection}
-              ticketId={ticket.id}
-              action={ticket.suggestion.suggested_action}
-              onApproved={load}
-            />
-          )}
+          {ticket.suggestion?.suggested_action &&
+            ticket.suggestion.suggested_action.type !== "none" &&
+            (ticket.suggestion.suggested_action.type === "cancel_order" ||
+            ticket.suggestion.suggested_action.type === "edit_address" ? (
+              <ActionApprovalPanel
+                connection={connection}
+                ticketId={ticket.id}
+                action={ticket.suggestion.suggested_action}
+                onApproved={load}
+              />
+            ) : (
+              <RefundApprovalPanel
+                connection={connection}
+                ticketId={ticket.id}
+                action={ticket.suggestion.suggested_action}
+                onApproved={load}
+              />
+            ))}
 
           <div className="bg-surface dark:bg-surface-dark border border-line dark:border-line-dark rounded-xl2 shadow-panel p-5">
             <label className="block font-mono text-[11px] tracking-[0.14em] uppercase text-ink-400 dark:text-ink-dark-400 mb-2">Reply</label>

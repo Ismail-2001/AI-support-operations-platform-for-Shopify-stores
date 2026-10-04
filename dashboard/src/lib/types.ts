@@ -7,14 +7,64 @@ export type TicketStatus = "open" | "in_progress" | "awaiting_customer" | "resol
 export type Sentiment = "very_negative" | "negative" | "neutral" | "positive" | "very_positive";
 export type TicketChannel = "email" | "chat" | "gorgias" | "social" | "phone";
 export type MessageSender = "customer" | "agent" | "ai";
-export type ActionType = "refund" | "resend_order" | "none";
+export type ActionType = "refund" | "resend_order" | "cancel_order" | "edit_address" | "none";
 
 export interface SuggestedAction {
   type: ActionType;
   order_id?: string | null;
   amount?: number | null;
   reason?: string | null;
+  address?: Record<string, string> | null;
+  refund_line_items?: { line_item_id: number; quantity: number }[] | null;
   requires_approval: boolean;
+}
+
+export interface OrderLineItem {
+  id: number;
+  title: string;
+  variant_title?: string | null;
+  quantity: number;
+  price: string;
+}
+
+export interface TicketOrder {
+  ticket_id: string;
+  order_id: string;
+  order_name?: string | null;
+  total_price: number;
+  currency?: string | null;
+  financial_status?: string | null;
+  fulfillment_status?: string | null;
+  cancelled_at?: string | null;
+  shipping_address: Record<string, string>;
+  line_items: OrderLineItem[];
+  already_refunded: number;
+  refundable: number;
+}
+
+export interface ThresholdSetting {
+  category: string;
+  min_confidence: number;
+  source: "settings" | "runtime_override";
+  env_default: number;
+}
+
+export interface AutoSendCategoryReport {
+  current_threshold: number;
+  suggested_threshold: number;
+  recommendation: string;
+  reviewed_samples: number;
+  edited_samples: number;
+  edit_rate: number | null;
+}
+
+export interface AutoSendReport {
+  auto_send_enabled: boolean;
+  categories: Record<string, AutoSendCategoryReport>;
+  blocked_categories: string[];
+  daily_cost_cap_usd: number;
+  min_samples_for_recommendation: number;
+  absolute_min_threshold: number;
 }
 
 export interface Ticket {

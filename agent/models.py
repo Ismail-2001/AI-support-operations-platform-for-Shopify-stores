@@ -108,6 +108,8 @@ class ResponseSuggestion(BaseModel):
 class ActionType(str, Enum):
     REFUND = "refund"
     RESEND_ORDER = "resend_order"
+    CANCEL_ORDER = "cancel_order"
+    EDIT_ADDRESS = "edit_address"
     NONE = "none"
 
 
@@ -116,8 +118,12 @@ class SuggestedAction(BaseModel):
     order_id: str | None = None
     amount: float | None = None
     reason: str | None = None
-    # Actions are ALWAYS human-approved regardless of response confidence — see
-    # api/customer_support.py's /actions/refund endpoint. This flag is informational only.
+    # For edit_address: the corrected shipping address the customer asked for.
+    address: dict[str, str] | None = None
+    # For refund: scope the refund to specific line items (partial / item-level).
+    refund_line_items: list[dict[str, Any]] | None = None
+    # Actions are ALWAYS human-approved regardless of response confidence - see
+    # api/customer_support.py's /actions/* endpoints. This flag is informational only.
     requires_approval: bool = True
 
 
