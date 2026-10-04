@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:widget": "esbuild src/widget/widget.ts --bundle --minify --format=iife --target=es2018 --legal-comments=none --outfile=../api/static/cs-chat.js",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -26,6 +27,7 @@
     "@vitejs/plugin-react": "^4.7.0",
     "@vitest/coverage-v8": "^4.1.11",
     "autoprefixer": "^10.4.19",
+    "esbuild": "^0.25.0",
     "jsdom": "^30.0.1",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.4",

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Search, Inbox, BarChart3, BookOpen, Settings, Wand2 } from "lucide-react";
+import { Search, Inbox, BarChart3, BookOpen, Settings, Wand2, MessageSquare, TrendingUp } from "lucide-react";
 import { api } from "../lib/api";
 import type { Connection } from "../lib/api";
 import type { TicketWithSuggestion } from "../lib/types";
@@ -64,7 +64,9 @@ export function CommandPalette({ open, onClose, onNavigate, onOpenTicket, connec
   const navItems = [
     { id: "tickets" as const, label: "Tickets", icon: Inbox },
     { id: "analytics" as const, label: "Analytics", icon: BarChart3 },
+    { id: "roi" as const, label: "ROI & impact", icon: TrendingUp },
     { id: "knowledge-base" as const, label: "Knowledge base", icon: BookOpen },
+    { id: "widget" as const, label: "Chat widget", icon: MessageSquare },
     { id: "setup" as const, label: "Setup", icon: Wand2 },
     { id: "settings" as const, label: "Settings", icon: Settings },
   ];

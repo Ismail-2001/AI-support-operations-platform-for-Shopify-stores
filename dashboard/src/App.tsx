@@ -10,6 +10,8 @@ import { TicketsPage } from "./pages/TicketsPage";
 import { TicketDetailPage } from "./pages/TicketDetailPage";
 import { AnalyticsPage } from "./pages/AnalyticsPage";
 import { KnowledgeBasePage } from "./pages/KnowledgeBasePage";
+import { WidgetPage } from "./pages/WidgetPage";
+import { RoiPage } from "./pages/RoiPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 
@@ -78,7 +80,9 @@ export default function App() {
               <TicketDetailPage connection={connection} ticketId={openTicketId} onBack={() => setOpenTicketId(null)} />
             )}
             {view === "analytics" && <AnalyticsPage connection={connection} />}
+            {view === "roi" && <RoiPage connection={connection} />}
             {view === "knowledge-base" && <KnowledgeBasePage connection={connection} />}
+            {view === "widget" && <WidgetPage connection={connection} />}
             {view === "setup" && <SetupPage connection={connection} onNavigate={navigateTo} />}
             {view === "settings" && <SettingsPage connection={connection} health={health} />}
           </main>

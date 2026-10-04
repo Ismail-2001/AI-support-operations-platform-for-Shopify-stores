@@ -1,7 +1,8 @@
 import type {
-  AutoSendReport, BrandVoice, CalibrationReport, CostReport, KnowledgeBaseStatus, QualityStats,
-  SetupShopifyResult, SetupStatus, SetupTestResult, SupportAnalytics, ThresholdSetting, TicketMessage,
-  TicketOrder, TicketWithSuggestion, TraceEntry,
+  AutoSendReport, BrandVoice, CalibrationReport, CostReport, KbSyncStatus, KnowledgeBaseStatus,
+  LiveStockVariant, QualityStats, RoiAssumptions, RoiReport, SetupShopifyResult, SetupStatus,
+  SetupTestResult, SupportAnalytics, ThresholdSetting, TicketMessage, TicketOrder,
+  TicketWithSuggestion, TraceEntry, WidgetConfig, WidgetSettings,
 } from "./types";
 
 export class ApiError extends Error {
@@ -140,12 +141,48 @@ export const api = {
   kbStatus: (conn: Connection) => request<KnowledgeBaseStatus>(conn, "/support/knowledge-base"),
   kbIngest: (conn: Connection, source: string, title: string, content: string) =>
     request(conn, "/support/knowledge-base", { method: "POST", body: JSON.stringify({ source, title, content }) }),
-  kbSyncShopify: (conn: Connection) =>
-    request<{ status: string; total_chunks: number }>(conn, "/support/knowledge-base/sync-shopify", { method: "POST" }),
+  /** Starts the background catalog sync and waits for it to finish, reporting
+   * progress via onProgress (called on every poll). Throws ApiError if the job
+   * errors or takes > ~4 minutes. */
+  kbSyncShopify: async (
+    conn: Connection,
+    opts?: { force?: boolean; onProgress?: (s: KbSyncStatus) => void },
+  ): Promise<KbSyncStatus> => {
+    const force = opts?.force ?? false;
+    await request(conn, `/support/knowledge-base/sync-shopify${force ? "?force=true" : ""}`, { method: "POST" });
+    for (let i = 0; i < 360; i++) {
+      const s = await request<KbSyncStatus>(conn, "/support/knowledge-base/sync-status");
+      opts?.onProgress?.(s);
+      if (s.status === "error") throw new ApiError(500, s.error || "Sync failed");
+      if (s.status === "idle" && s.started_at) return s;
+      await new Promise((r) => setTimeout(r, 650));
+    }
+    throw new ApiError(408, "Sync is taking longer than expected — reload to check its status.");
+  },
+  kbSyncStatus: (conn: Connection) => request<KbSyncStatus>(conn, "/support/knowledge-base/sync-status"),
+  kbLiveStock: (conn: Connection, handle: string) =>
+    request<{ handle: string; title: string; variants: LiveStockVariant[]; checked_at: string }>(
+      conn, `/support/knowledge-base/live-stock?handle=${encodeURIComponent(handle)}`,
+    ),
   kbSearch: (conn: Connection, query: string) =>
     request<{ query: string; results: { source: string; title: string; content: string; score: number }[] }>(
       conn, "/support/knowledge-base/search", { method: "POST", body: JSON.stringify({ query, top_k: 5 }) }
     ),
+
+  getRoi: (conn: Connection, days: string) => request<RoiReport>(conn, `/support/analytics/roi?days=${days}`),
+  updateRoiSettings: (conn: Connection, settings: RoiAssumptions) =>
+    request<{ assumptions: RoiAssumptions }>(conn, "/support/analytics/roi/settings", {
+      method: "PUT",
+      body: JSON.stringify(settings),
+    }),
+
+  getWidgetSettings: (conn: Connection) => request<WidgetSettings>(conn, "/support/widget"),
+  updateWidgetConfig: (conn: Connection, config: Partial<WidgetConfig>) =>
+    request<{ config: WidgetConfig }>(conn, "/support/widget", {
+      method: "PUT",
+      body: JSON.stringify(config),
+    }),
+  rotateWidgetKey: (conn: Connection) => request<{ key: string }>(conn, "/support/widget/key", { method: "POST" }),
 
   setupStatus: (conn: Connection) => request<SetupStatus>(conn, "/support/setup"),
 

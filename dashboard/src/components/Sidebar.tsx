@@ -1,7 +1,14 @@
-import { Inbox, BarChart3, BookOpen, Radio, LogOut, Sun, Moon, Settings, Wand2 } from "lucide-react";
+import { Inbox, BarChart3, BookOpen, Radio, LogOut, Sun, Moon, Settings, Wand2, MessageSquare, TrendingUp } from "lucide-react";
 import { useTheme } from "../lib/ThemeProvider";
 
-export type View = "tickets" | "analytics" | "knowledge-base" | "settings" | "setup";
+export type View =
+  | "tickets"
+  | "analytics"
+  | "knowledge-base"
+  | "widget"
+  | "roi"
+  | "settings"
+  | "setup";
 
 export function Sidebar({
   view, onNavigate, onDisconnect, health,
@@ -17,7 +24,9 @@ export function Sidebar({
   const items: { id: View; label: string; icon: typeof Inbox }[] = [
     { id: "tickets", label: "Tickets", icon: Inbox },
     { id: "analytics", label: "Analytics", icon: BarChart3 },
+    { id: "roi", label: "ROI & impact", icon: TrendingUp },
     { id: "knowledge-base", label: "Knowledge base", icon: BookOpen },
+    { id: "widget", label: "Chat widget", icon: MessageSquare },
     { id: "setup", label: "Setup", icon: Wand2 },
     { id: "settings", label: "Settings", icon: Settings },
   ];

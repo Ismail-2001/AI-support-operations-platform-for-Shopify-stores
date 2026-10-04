@@ -195,3 +195,80 @@ export interface SetupTestResult {
   order_context_used: boolean;
   kb_used?: boolean;
 }
+
+// ── Week 3-4: chat widget, ROI dashboard, product knowledge ──
+
+export interface KbSyncStatus {
+  status: "idle" | "scheduled" | "running" | "error";
+  force: boolean;
+  products_seen: number;
+  products_updated: number;
+  products_skipped: number;
+  products_failed: number;
+  policies_updated: number;
+  chunks_added: number;
+  error: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface LiveStockVariant {
+  variant: string;
+  quantity: number | null;
+  status: "in_stock" | "low_stock" | "out_of_stock" | "unknown";
+}
+
+export interface RoiAssumptions {
+  minutes_per_auto_sent: number;
+  minutes_per_draft: number;
+  hourly_rate_usd: number;
+}
+
+export interface RoiSeriesPoint {
+  date: string;
+  tickets: number;
+  auto_sent: number;
+  hours_saved: number;
+  labor_saved_usd: number;
+  llm_cost_usd: number;
+  net_usd: number;
+}
+
+export interface RoiReport {
+  window: {
+    total: number;
+    auto_sent: number;
+    responded: number;
+    edited: number;
+    drafts_reviewed: number;
+    llm_cost_usd: number;
+  };
+  assumptions: RoiAssumptions;
+  hours_saved: number;
+  labor_saved_usd: number;
+  net_savings_usd: number;
+  roi_percent: number | null;
+  cost_per_ticket_usd: number | null;
+  draft_edit_rate: number;
+  by_channel: Record<string, number>;
+  category_tickets: Record<string, number>;
+  category_edits: Record<string, { total: number; edited: number }>;
+  series: RoiSeriesPoint[];
+  days: string;
+  since: string | null;
+}
+
+export interface WidgetConfig {
+  enabled: boolean;
+  title: string;
+  greeting: string;
+  welcome_message: string;
+  color: string;
+  logo_url: string;
+  show_confidence: boolean;
+}
+
+export interface WidgetSettings {
+  key: string;
+  config: WidgetConfig;
+}

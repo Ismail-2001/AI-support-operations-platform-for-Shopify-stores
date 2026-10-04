@@ -145,7 +145,10 @@ export function SetupPage({ connection, onNavigate }: { connection: Connection; 
     setBusy(true); setError(""); setSyncMsg("");
     try {
       const res = await api.kbSyncShopify(connection);
-      setSyncMsg(`Imported ${res.total_chunks} chunks — policies, products, everything the agent can cite.`);
+      setSyncMsg(
+        `Imported ${res.chunks_added} chunks — ${res.products_updated} products updated, ` +
+          `${res.products_skipped} already current, ${res.policies_updated} policies. Everything the agent can cite.`,
+      );
       refresh();
     } catch {
       setError("Import failed — make sure the store is connected in step 1 and the Google API key is set.");
