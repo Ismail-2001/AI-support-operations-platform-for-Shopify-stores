@@ -1,13 +1,18 @@
 export type TicketCategory =
   | "order_status" | "shipping" | "returns" | "refund"
-  | "product_question" | "complaint" | "technical" | "other";
+  | "product_question" | "complaint" | "technical" | "subscription" | "other";
 
 export type TicketPriority = "low" | "normal" | "high" | "urgent" | "critical";
 export type TicketStatus = "open" | "in_progress" | "awaiting_customer" | "resolved" | "closed";
 export type Sentiment = "very_negative" | "negative" | "neutral" | "positive" | "very_positive";
 export type TicketChannel = "email" | "chat" | "gorgias" | "social" | "phone";
 export type MessageSender = "customer" | "agent" | "ai";
-export type ActionType = "refund" | "resend_order" | "cancel_order" | "edit_address" | "none";
+export type ActionType =
+  | "refund" | "resend_order" | "cancel_order" | "edit_address"
+  | "subscription_action" | "return_label" | "none";
+
+export type SubscriptionOperation =
+  | "pause" | "skip" | "cancel" | "update_address" | "change_frequency";
 
 export interface SuggestedAction {
   type: ActionType;
@@ -16,7 +21,67 @@ export interface SuggestedAction {
   reason?: string | null;
   address?: Record<string, string> | null;
   refund_line_items?: { line_item_id: number; quantity: number }[] | null;
+  subscription_id?: string | null;
+  subscription_provider?: string | null;
+  subscription_operation?: SubscriptionOperation | null;
+  frequency?: { unit?: string | number; count?: number | string } | null;
+  return_line_items?: { line_item_id?: number; quantity?: number; title?: string }[] | null;
   requires_approval: boolean;
+}
+
+export interface NormalizedSubscription {
+  id: string;
+  provider: "recharge" | "skio";
+  status: string;
+  title: string;
+  quantity?: number | null;
+  price?: string | null;
+  next_charge_date?: string | null;
+  frequency_unit?: string | null;
+  frequency_count?: number | null;
+  address?: Record<string, string> | null;
+  email?: string | null;
+}
+
+export interface TicketSubscriptions {
+  ticket_id: string;
+  email: string;
+  configured: boolean;
+  provider: string | null;
+  subscriptions: NormalizedSubscription[];
+}
+
+export interface ReturnEligibility {
+  ticket_id: string;
+  order_id: string | null;
+  eligible: boolean;
+  reason: string | null;
+  window_days: number;
+  last_return_date: string | null;
+  line_items: {
+    line_item_id?: number;
+    title?: string;
+    variant_title?: string | null;
+    quantity?: number;
+    sku?: string | null;
+  }[];
+  label_provider: {
+    provider: string;
+    configured: boolean;
+    missing_settings: string[];
+  };
+}
+
+export interface ReturnLabelResult {
+  label_id?: string | null;
+  label_url?: string | null;
+  tracking_number?: string | null;
+  tracking_url?: string | null;
+  carrier?: string | null;
+  service_code?: string | null;
+  cost_usd?: number | null;
+  status?: string | null;
+  rma_number?: string | null;
 }
 
 export interface OrderLineItem {

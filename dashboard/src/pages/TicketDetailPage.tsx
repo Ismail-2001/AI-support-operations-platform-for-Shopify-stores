@@ -7,6 +7,8 @@ import { CategoryBadge, PriorityBadge, SentimentBadge, SenderBadge } from "../co
 import { ConfidenceBar } from "../components/ConfidenceBar";
 import { RefundApprovalPanel } from "../components/RefundApprovalPanel";
 import { ActionApprovalPanel } from "../components/ActionApprovalPanel";
+import { SubscriptionApprovalPanel } from "../components/SubscriptionApprovalPanel";
+import { ReturnApprovalPanel } from "../components/ReturnApprovalPanel";
 import { TraceViewer } from "../components/TraceViewer";
 import { CustomerInfoPanel } from "../components/CustomerInfoPanel";
 import { TicketDetailSkeleton } from "../components/Skeleton";
@@ -172,8 +174,22 @@ export function TicketDetailPage({ connection, ticketId, onBack }: { connection:
 
           {ticket.suggestion?.suggested_action &&
             ticket.suggestion.suggested_action.type !== "none" &&
-            (ticket.suggestion.suggested_action.type === "cancel_order" ||
-            ticket.suggestion.suggested_action.type === "edit_address" ? (
+            (ticket.suggestion.suggested_action.type === "subscription_action" ? (
+              <SubscriptionApprovalPanel
+                connection={connection}
+                ticketId={ticket.id}
+                action={ticket.suggestion.suggested_action}
+                onApproved={load}
+              />
+            ) : ticket.suggestion.suggested_action.type === "return_label" ? (
+              <ReturnApprovalPanel
+                connection={connection}
+                ticketId={ticket.id}
+                action={ticket.suggestion.suggested_action}
+                onApproved={load}
+              />
+            ) : ticket.suggestion.suggested_action.type === "cancel_order" ||
+              ticket.suggestion.suggested_action.type === "edit_address" ? (
               <ActionApprovalPanel
                 connection={connection}
                 ticketId={ticket.id}

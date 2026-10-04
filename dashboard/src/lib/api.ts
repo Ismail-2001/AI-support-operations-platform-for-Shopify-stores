@@ -1,8 +1,9 @@
 import type {
   AutoSendReport, BrandVoice, CalibrationReport, CostReport, KbSyncStatus, KnowledgeBaseStatus,
-  LiveStockVariant, QualityStats, RoiAssumptions, RoiReport, SetupShopifyResult, SetupStatus,
+  LiveStockVariant, NormalizedSubscription, QualityStats, ReturnEligibility, ReturnLabelResult,
+  RoiAssumptions, RoiReport, SetupShopifyResult, SetupStatus,
   SetupTestResult, SupportAnalytics, ThresholdSetting, TicketMessage, TicketOrder,
-  TicketWithSuggestion, TraceEntry, WidgetConfig, WidgetSettings,
+  TicketSubscriptions, TicketWithSuggestion, TraceEntry, WidgetConfig, WidgetSettings,
 } from "./types";
 
 export class ApiError extends Error {
@@ -121,6 +122,51 @@ export const api = {
     ),
 
   getTicketOrder: (conn: Connection, id: string) => request<TicketOrder>(conn, `/support/tickets/${id}/order`),
+
+  getSubscriptions: (conn: Connection, id: string) =>
+    request<TicketSubscriptions>(conn, `/support/tickets/${id}/subscriptions`),
+
+  approveSubscriptionAction: (
+    conn: Connection,
+    id: string,
+    body: {
+      subscription_id: string;
+      operation: string;
+      provider?: string;
+      reason: string;
+      address?: Record<string, string>;
+      frequency?: { unit?: string | number; count?: number | string };
+    },
+    idempotencyKey: string,
+  ) =>
+    request<{ subscription: NormalizedSubscription; operation: string; replayed: boolean }>(
+      conn,
+      `/support/tickets/${id}/actions/subscription`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify(body),
+      },
+    ),
+
+  getReturnEligibility: (conn: Connection, id: string) =>
+    request<ReturnEligibility>(conn, `/support/tickets/${id}/return-eligibility`),
+
+  approveReturnLabel: (
+    conn: Connection,
+    id: string,
+    body: { rma_number?: string; reason?: string },
+    idempotencyKey: string,
+  ) =>
+    request<{ label: ReturnLabelResult; replayed: boolean }>(
+      conn,
+      `/support/tickets/${id}/actions/return-label`,
+      {
+        method: "POST",
+        headers: { "Idempotency-Key": idempotencyKey },
+        body: JSON.stringify(body),
+      },
+    ),
 
   updateTicket: (conn: Connection, id: string, updates: { status?: string; priority?: string }) =>
     request(conn, `/support/tickets/${id}`, { method: "PATCH", body: JSON.stringify(updates) }),
