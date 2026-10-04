@@ -54,6 +54,7 @@ STAGE_LABELS = {
     "apply_escalation": "Checking conversation history…",
     "fetch_order_context": "Looking up your order…",
     "fetch_knowledge_context": "Checking our help docs…",
+    "fetch_subscription_context": "Checking your subscription…",
     "generate_response": "Writing a reply…",
     "decide_auto_send": "Reviewing confidence…",
     "save_results": "Saving…",

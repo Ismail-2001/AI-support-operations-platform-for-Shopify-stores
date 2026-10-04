@@ -55,7 +55,7 @@ def reset_settings():
     can't silently affect another test."""
     settings.AUTO_SEND_ENABLED = False
     settings.AUTO_SEND_MIN_CONFIDENCE = 0.85
-    settings.AUTO_SEND_BLOCKED_CATEGORIES = "refund,complaint,legal,other"
+    settings.AUTO_SEND_BLOCKED_CATEGORIES = "refund,complaint,legal,other,subscription"
     settings.AUTO_SEND_MIN_CONFIDENCE_ORDER_STATUS = 0.88
     settings.AUTO_SEND_MIN_CONFIDENCE_SHIPPING = 0.88
     settings.AUTO_SEND_MIN_CONFIDENCE_PRODUCT_QUESTION = 0.90
@@ -105,7 +105,13 @@ class FakeResponseEngine:
         self.suggested_action = suggested_action
 
     async def generate_suggestion(
-        self, ticket, classification, order_context=None, knowledge_context=None, history=None
+        self,
+        ticket,
+        classification,
+        order_context=None,
+        knowledge_context=None,
+        subscription_context=None,
+        history=None,
     ):
         return ResponseSuggestion(
             ticket_id=ticket.id,

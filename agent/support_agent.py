@@ -92,6 +92,8 @@ class CustomerSupportAgent:
             "order_used": False,
             "knowledge_context": None,
             "kb_used": False,
+            "subscription_context": None,
+            "subscription_used": False,
             "suggestion": None,
             "auto_sent": False,
             "dry_run": dry_run,
@@ -112,6 +114,7 @@ class CustomerSupportAgent:
                 suggestion=accumulated["suggestion"],
                 order_context_used=accumulated.get("order_used", False),
                 kb_used=accumulated.get("kb_used", False),
+                subscription_used=accumulated.get("subscription_used", False),
                 auto_sent=accumulated.get("auto_sent", False),
             ),
         }
@@ -127,6 +130,8 @@ class CustomerSupportAgent:
                 "order_used": False,
                 "knowledge_context": None,
                 "kb_used": False,
+                "subscription_context": None,
+                "subscription_used": False,
                 "suggestion": None,
                 "auto_sent": False,
                 "dry_run": dry_run,
@@ -139,5 +144,6 @@ class CustomerSupportAgent:
             suggestion=final_state["suggestion"],
             order_context_used=final_state["order_used"],
             kb_used=final_state["kb_used"],
+            subscription_used=final_state.get("subscription_used", False),
             auto_sent=final_state["auto_sent"],
         )

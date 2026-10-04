@@ -49,6 +49,8 @@ services:
         value: claude-haiku-4-5-20251001
       - key: GOOGLE_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        value: gemini-2.0-flash
 
       # ── Shopify ─────────────────────────────────────────
       - key: SHOPIFY_SHOP_DOMAIN
@@ -66,13 +68,53 @@ services:
       - key: GORGIAS_WEBHOOK_SECRET
         sync: false
 
+      # ── Subscriptions (Recharge / Skio) ──────────────────
+      - key: RECHARGE_API_TOKEN
+        sync: false
+      - key: SKIO_API_TOKEN
+        sync: false
+      - key: SUBSCRIPTION_PROVIDER
+        value: auto
+      - key: SUBSCRIPTION_PAUSE_DAYS
+        value: "30"
+
+      # ── Return labels (ShipEngine) ──────────────────────
+      - key: SHIPENGINE_API_KEY
+        sync: false
+      - key: RETURN_WINDOW_DAYS
+        value: "30"
+      - key: RETURN_ADDRESS_NAME
+        sync: false
+      - key: RETURN_ADDRESS1
+        sync: false
+      - key: RETURN_ADDRESS2
+        sync: false
+      - key: RETURN_CITY
+        sync: false
+      - key: RETURN_STATE
+        sync: false
+      - key: RETURN_ZIP
+        sync: false
+      - key: RETURN_COUNTRY
+        value: US
+      - key: RETURN_PHONE
+        sync: false
+      - key: RETURN_PACKAGE_WEIGHT_OZ
+        value: "16"
+      - key: RETURN_PACKAGE_LENGTH_IN
+        value: "10"
+      - key: RETURN_PACKAGE_WIDTH_IN
+        value: "8"
+      - key: RETURN_PACKAGE_HEIGHT_IN
+        value: "4"
+
       # ── Automation policy ───────────────────────────────
       - key: AUTO_SEND_ENABLED
         value: "false"
       - key: AUTO_SEND_MIN_CONFIDENCE
         value: "0.85"
       - key: AUTO_SEND_BLOCKED_CATEGORIES
-        value: "refund,complaint,legal,other"
+        value: "refund,complaint,legal,other,subscription"
 
       # ── Storage ─────────────────────────────────────────
       # SQLite file. Relative path = service working directory (EPHEMERAL on

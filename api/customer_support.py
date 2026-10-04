@@ -16,6 +16,7 @@ from agent.config import settings
 from agent.knowledge_base import knowledge_base
 from agent.models import (
     MessageSender,
+    SubscriptionOperation,
     SupportAnalytics,
     SupportTicket,
     TicketChannel,
@@ -28,6 +29,7 @@ from agent.rate_limit import (
     rate_limit_refund,
     rate_limit_resend,
 )
+from agent.returns import evaluate_return_eligibility
 from agent.roi import compute_roi, get_roi_settings, save_roi_settings
 from agent.storage import storage_is_ephemeral, store
 from agent.support_agent import CustomerSupportAgent
@@ -38,7 +40,12 @@ from api.errors import (
     raise_unprocessable,
 )
 from integrations.gorgias import GorgiasClient, GorgiasNotConfigured
+from integrations.shipengine import ShipEngineClient
 from integrations.shopify import ShopifyNotConfigured
+from integrations.subscriptions import (
+    SubscriptionError,
+    SubscriptionService,
+)
 
 logger = structlog.get_logger(__name__)
 
@@ -911,6 +918,433 @@ async def approve_edit_address(
         "previous_address": previous_address,
         "address": req.address,
         "order": result,
+        "replayed": False,
+    }
+
+
+# ── Subscriptions (Recharge / Skio) ────────────────────────
+
+
+def _subscription_service(provider: str | None) -> SubscriptionService:
+    if provider and provider not in ("recharge", "skio"):
+        raise_unprocessable(
+            f"Unknown subscription provider '{provider}' — use 'recharge' or 'skio'"
+        )
+    return SubscriptionService(provider=provider)
+
+
+async def _ticket_email(ticket_id: str, email_override: str | None) -> str:
+    if email_override:
+        return email_override.strip()
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+    email = row["ticket"].get("customer_email")
+    if not email:
+        raise APIError(
+            code="NO_CUSTOMER_EMAIL",
+            message="Ticket has no customer_email — pass ?email= to look up subscriptions",
+            status=400,
+        )
+    return str(email)
+
+
+@router.get("/tickets/{ticket_id}/subscriptions")
+async def get_ticket_subscriptions(ticket_id: str, email: str | None = Query(None)):
+    """List the ticket customer's subscriptions from the connected provider.
+
+    Returns 200 with `configured: false` (rather than 409) when no provider is
+    connected so the dashboard can render a 'connect an app' state."""
+    customer_email = await _ticket_email(ticket_id, email)
+    service = SubscriptionService()
+    if not service.enabled:
+        return {
+            "ticket_id": ticket_id,
+            "email": customer_email,
+            "configured": False,
+            "provider": None,
+            "subscriptions": [],
+        }
+    try:
+        subs = await service.list_subscriptions(customer_email)
+    except SubscriptionError as e:
+        raise APIError(code=e.code, message=str(e), status=e.status, details=e.details) from e
+    return {
+        "ticket_id": ticket_id,
+        "email": customer_email,
+        "configured": True,
+        "provider": service.provider,
+        "subscriptions": [s.model_dump(exclude={"raw"}) for s in subs],
+    }
+
+
+class SubscriptionActionRequest(BaseModel):
+    subscription_id: str
+    operation: SubscriptionOperation
+    provider: str | None = None  # "recharge" | "skio"; defaults to the configured provider
+    reason: str = "Requested by customer"
+    address: dict[str, str] | None = None
+    frequency: dict[str, Any] | None = None  # {"unit": "week", "count": 2}
+
+    @field_validator("subscription_id")
+    @classmethod
+    def _validate_subscription_id(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("subscription_id is required")
+        return v
+
+    @field_validator("address")
+    @classmethod
+    def _validate_address(cls, v: dict[str, str] | None) -> dict[str, str] | None:
+        if v is None:
+            return v
+        required = ("address1", "city", "country", "zip")
+        missing = [f for f in required if not (v.get(f) or "").strip()]
+        if missing:
+            raise ValueError(f"address is missing required fields: {', '.join(missing)}")
+        return {k: val.strip() for k, val in v.items() if isinstance(val, str)}
+
+
+@router.post("/tickets/{ticket_id}/actions/subscription", dependencies=[Depends(rate_limit_action)])
+async def approve_subscription_action(
+    ticket_id: str,
+    req: SubscriptionActionRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """Executes an approved subscription operation (pause / skip / cancel /
+    update_address / change_frequency) against Recharge or Skio. Never called
+    automatically — a human always approves it from the dashboard.
+
+    Requires an `Idempotency-Key` header: the same key returns the FIRST call's
+    result instead of executing the operation twice (skipping twice or cancelling
+    twice are both customer-visible mistakes).
+
+    Guards (shared across providers, enforced in SubscriptionService):
+    - subscription must exist and not already be cancelled
+    - skip requires an upcoming charge
+    - change_frequency accepts only day/week/month with count 1-60"""
+    audit_action = f"subscription_{req.operation.value}"
+    existing = await store.get_action_audit(idempotency_key)
+    if existing and existing["action"] != audit_action:
+        raise APIError(
+            code="IDEMPOTENCY_KEY_CONFLICT",
+            message=f"Idempotency-Key was already used for a different action "
+            f"('{existing['action']}') — generate a new key",
+            status=409,
+        )
+    if existing and existing["action"] == audit_action:
+        logger.info(
+            "subscription_action_idempotent_replay",
+            idempotency_key=idempotency_key,
+            ticket_id=ticket_id,
+            operation=req.operation.value,
+        )
+        return {
+            "ticket_id": existing["ticket_id"],
+            "subscription": (existing.get("shopify_response") or {}).get("subscription"),
+            "operation": req.operation.value,
+            "replayed": True,
+        }
+
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+
+    audit_request = req.model_dump(mode="json")
+    service = _subscription_service(req.provider)
+
+    if req.operation == SubscriptionOperation.PAUSE:
+        after = await service.pause(req.subscription_id)
+    elif req.operation == SubscriptionOperation.SKIP:
+        after = await service.skip(req.subscription_id)
+    elif req.operation == SubscriptionOperation.CANCEL:
+        after = await service.cancel(req.subscription_id, reason=req.reason)
+    elif req.operation == SubscriptionOperation.UPDATE_ADDRESS:
+        if not req.address:
+            raise_unprocessable("update_address requires an `address` object")
+        after = await service.update_address(req.subscription_id, req.address)
+    elif req.operation == SubscriptionOperation.CHANGE_FREQUENCY:
+        freq = req.frequency or {}
+        unit = freq.get("unit")
+        count = freq.get("count")
+        if not unit or count is None:
+            raise_unprocessable(
+                'change_frequency requires frequency = {"unit": "day"|"week"|"month", "count": N}'
+            )
+        try:
+            after = await service.change_frequency(req.subscription_id, str(unit), int(count))
+        except (TypeError, ValueError) as e:
+            raise_unprocessable(f"Invalid frequency: {e}")
+    else:  # pragma: no cover — enum covers all branches above
+        raise_unprocessable(f"Unsupported operation '{req.operation}'")
+
+    response_payload = {
+        "subscription": after.model_dump(exclude={"raw"}),
+        "provider": service.provider,
+    }
+    await store.record_action_audit(
+        idempotency_key,
+        ticket_id,
+        # Subscriptions aren't order-scoped; keep the column non-null per schema.
+        order_id="",
+        action=audit_action,
+        request=audit_request,
+        status="succeeded",
+        shopify_response=response_payload,
+    )
+
+    verb = {
+        SubscriptionOperation.PAUSE: "paused",
+        SubscriptionOperation.SKIP: "next order skipped",
+        SubscriptionOperation.CANCEL: f"cancelled (reason: {req.reason})",
+        SubscriptionOperation.UPDATE_ADDRESS: "shipping address updated",
+        SubscriptionOperation.CHANGE_FREQUENCY: (
+            f"frequency changed to every {req.frequency.get('count')} "
+            f"{req.frequency.get('unit')}"
+            if req.frequency
+            else "frequency changed"
+        ),
+    }[req.operation]
+    await store.add_message(
+        ticket_id,
+        MessageSender.AGENT.value,
+        f"[Action taken] Subscription {req.subscription_id}: {verb}.",
+    )
+    logger.info(
+        "subscription_action_approved",
+        ticket_id=ticket_id,
+        subscription_id=req.subscription_id,
+        operation=req.operation.value,
+        provider=service.provider,
+    )
+    return {
+        "ticket_id": ticket_id,
+        **response_payload,
+        "operation": req.operation.value,
+        "replayed": False,
+    }
+
+
+# ── Return labels (ShipEngine) ─────────────────────────────
+
+
+@router.get("/tickets/{ticket_id}/return-eligibility")
+async def get_return_eligibility(ticket_id: str):
+    """Whether a prepaid return label can be created for this ticket's order,
+    plus what's blocking it when it can't (window expired, not shipped, missing
+    ShipEngine config...). The approval endpoint re-checks all of this server-side."""
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+
+    shipengine = ShipEngineClient()
+    configured, missing_fields = shipengine.configured
+
+    order_id = row["ticket"].get("order_id")
+    order = None
+    shopify_error = None
+    if order_id:
+        try:
+            order = await _agent.shopify.get_order_by_id(order_id)
+        except ShopifyNotConfigured:
+            shopify_error = "Shopify is not configured — cannot look up the order"
+        if order is None and shopify_error is None:
+            shopify_error = f"Order '{order_id}' not found"
+
+    eligibility = evaluate_return_eligibility(order)
+    if shopify_error:
+        eligibility = {**eligibility, "eligible": False, "reason": shopify_error}
+
+    return {
+        "ticket_id": ticket_id,
+        "order_id": order_id,
+        **eligibility,
+        "label_provider": {
+            "provider": "shipengine",
+            "configured": configured,
+            "missing_settings": missing_fields,
+        },
+    }
+
+
+class ReturnLabelActionRequest(BaseModel):
+    rate_id: str | None = None  # pre-approved rate; cheapest is chosen when omitted
+    rma_number: str | None = None
+    reason: str = "Return label requested"
+
+
+@router.post("/tickets/{ticket_id}/actions/return-label", dependencies=[Depends(rate_limit_action)])
+async def approve_return_label(
+    ticket_id: str,
+    req: ReturnLabelActionRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    """Purchases a real prepaid return label (ShipEngine) for the ticket's order.
+    Never called automatically — a human approves it from the dashboard, because
+    the label costs money.
+
+    Requires an `Idempotency-Key` header: replaying the key returns the FIRST
+    result instead of buying a second paid label. Eligibility (return window,
+    shipped/refunded state) is re-verified server-side here — the dashboard's
+    eligibility preview is advisory only."""
+    existing = await store.get_return_label_audit(idempotency_key)
+    if existing:
+        logger.info(
+            "return_label_idempotent_replay",
+            idempotency_key=idempotency_key,
+            ticket_id=ticket_id,
+            status=existing["status"],
+        )
+        return {
+            "ticket_id": existing["ticket_id"],
+            "order_id": existing["order_id"],
+            "label": {
+                "label_id": existing["label_id"],
+                "label_url": existing["label_url"],
+                "tracking_number": existing["tracking_number"],
+                "carrier_service": existing["carrier_service"],
+                "cost_usd": existing["cost_usd"],
+            },
+            "error": existing["error"],
+            "replayed": True,
+        }
+
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+    order_id = row["ticket"].get("order_id")
+    if not order_id:
+        raise APIError(
+            code="NO_ORDER_LINKED",
+            message="Ticket has no linked order_id — look up the order first",
+            status=400,
+        )
+
+    shipengine = ShipEngineClient()
+    if not shipengine.enabled:
+        raise_not_configured("ShipEngine")
+    configured, missing_fields = shipengine.configured
+    if not configured:
+        raise APIError(
+            code="RETURN_ADDRESS_MISSING",
+            message=f"Return address settings incomplete: {', '.join(missing_fields)}",
+            status=409,
+            details={"missing_settings": missing_fields},
+        )
+
+    try:
+        order = await _agent.shopify.get_order_by_id(order_id)
+    except ShopifyNotConfigured:
+        raise_not_configured("Shopify")
+    if not order:
+        raise_not_found("order", order_id)
+
+    eligibility = evaluate_return_eligibility(order)
+    if not eligibility["eligible"]:
+        raise APIError(
+            code="RETURN_NOT_ELIGIBLE",
+            message=str(eligibility["reason"]),
+            status=409,
+            details={"reason": eligibility["reason"], "window_days": eligibility["window_days"]},
+        )
+
+    # Prepaid return: FROM the customer (order shipping address) TO the store.
+    shipping = order.get("shipping_address") or order.get("billing_address") or {}
+    customer_address = {
+        "name": " ".join(filter(None, [shipping.get("first_name"), shipping.get("last_name")]))
+        or order.get("customer", {}).get("first_name", "Customer"),
+        "address1": shipping.get("address1"),
+        "address2": shipping.get("address2"),
+        "city": shipping.get("city"),
+        "state": shipping.get("province") or shipping.get("state"),
+        "zip": shipping.get("zip"),
+        "country": shipping.get("country"),
+        "phone": shipping.get("phone"),
+    }
+    if not (customer_address.get("address1") and customer_address.get("city")):
+        raise APIError(
+            code="NO_SHIPPING_ADDRESS",
+            message="Order has no shipping address — cannot build a return shipment",
+            status=409,
+        )
+
+    rma = req.rma_number or f"T-{ticket_id}"
+    audit_request = req.model_dump(mode="json")
+    try:
+        label = await shipengine.quote_and_buy(
+            customer_address, rma_number=rma, rate_id=req.rate_id
+        )
+    except APIError as e:
+        await store.record_return_label_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            status="failed",
+            provider="shipengine",
+            request=audit_request,
+            error=str(e.detail),
+        )
+        raise
+    except Exception as e:
+        logger.error("return_label_failed", ticket_id=ticket_id, order_id=order_id, error=str(e))
+        await store.record_return_label_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            status="failed",
+            provider="shipengine",
+            request=audit_request,
+            error=str(e),
+        )
+        raise APIError(
+            code="RETURN_LABEL_FAILED", message=f"Return label failed: {e}", status=502
+        ) from e
+
+    await store.record_return_label_audit(
+        idempotency_key,
+        ticket_id,
+        order_id,
+        status="succeeded",
+        provider="shipengine",
+        label_id=label["label_id"],
+        label_url=label["label_url"],
+        tracking_number=label["tracking_number"],
+        carrier_service=label.get("carrier") or label.get("service_code"),
+        cost_usd=label["cost_usd"],
+        request=audit_request,
+    )
+    await store.add_message(
+        ticket_id,
+        MessageSender.AGENT.value,
+        f"[Action taken] Return label created. Tracking: {label['tracking_number']} — "
+        f"attach it to the package and hand it to the carrier. "
+        f"Label PDF: {label['label_url']}",
+    )
+    # The ball is now in the customer's court (they must ship it back).
+    await store.update_status(ticket_id, status="awaiting_customer")
+
+    # Best-effort Shopify tag so the merchant can filter return-ship orders.
+    # Goes through the ticket's (possibly store-scoped) Shopify client; a fake or
+    # missing tag_order just logs and moves on — never fail the label over a tag.
+    tagger = getattr(_agent.shopify, "tag_order", None)
+    if tagger:
+        try:
+            await tagger(order_id, "return-label-created")
+        except Exception as e:
+            logger.warning("return_label_tag_failed", order_id=order_id, error=str(e))
+
+    logger.info(
+        "return_label_approved_and_processed",
+        ticket_id=ticket_id,
+        order_id=order_id,
+        label_id=label["label_id"],
+        cost_usd=label["cost_usd"],
+    )
+    return {
+        "ticket_id": ticket_id,
+        "order_id": order_id,
+        "label": label,
         "replayed": False,
     }
 

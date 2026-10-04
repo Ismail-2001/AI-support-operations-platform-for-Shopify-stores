@@ -30,7 +30,16 @@ from agent.observability import record_graph_step
 logger = structlog.get_logger(__name__)
 
 ORDER_RELEVANT_CATEGORIES = {"order_status", "shipping", "returns", "refund"}
-KB_RELEVANT_CATEGORIES = {"product_question", "returns", "refund", "shipping", "technical", "other"}
+KB_RELEVANT_CATEGORIES = {
+    "product_question",
+    "returns",
+    "refund",
+    "shipping",
+    "technical",
+    "other",
+    "subscription",
+}
+SUBSCRIPTION_RELEVANT_CATEGORIES = {"subscription"}
 REPEAT_CONTACT_ESCALATION_THRESHOLD = 3
 _PRIORITY_ORDER = [
     TicketPriority.LOW,
@@ -50,6 +59,8 @@ class AgentState(TypedDict):
     order_used: bool
     knowledge_context: str | None
     kb_used: bool
+    subscription_context: str | None
+    subscription_used: bool
     suggestion: ResponseSuggestion | None
     auto_sent: bool
     dry_run: bool
@@ -156,12 +167,84 @@ def build_agent_graph(classifier, response_engine, shopify):
         block = "\n\n---\n\n".join(f"[{c.source}] {c.title}\n{c.content}" for c in chunks)
         return {"knowledge_context": block, "kb_used": True}
 
+    async def fetch_subscription_context(state: AgentState) -> dict[str, Any]:
+        from integrations.subscriptions import (
+            SubscriptionNotConfigured,
+            SubscriptionService,
+        )
+
+        classification = state["classification"]
+        ticket = state["ticket"]
+        if classification.category.value not in SUBSCRIPTION_RELEVANT_CATEGORIES:
+            return {"subscription_context": None, "subscription_used": False}
+        if not ticket.customer_email:
+            return {"subscription_context": None, "subscription_used": False}
+
+        service = SubscriptionService()
+        if not service.enabled:
+            # Honest "we can't see it yet" — the response prompt must never invent
+            # subscription state, and never claim an action was performed.
+            return {
+                "subscription_context": "Subscription app is not connected — the agent "
+                "cannot see or change subscriptions.",
+                "subscription_used": False,
+            }
+
+        try:
+            subs = await service.list_subscriptions(ticket.customer_email)
+        except SubscriptionNotConfigured as e:
+            return {
+                "subscription_context": f"Subscription lookup unavailable: {e}",
+                "subscription_used": False,
+            }
+        except Exception as e:
+            logger.warning("subscription_lookup_failed", ticket_id=ticket.id, error=str(e))
+            return {
+                "subscription_context": "Subscription lookup failed — do not guess subscription "
+                "state; say the agent is checking.",
+                "subscription_used": False,
+            }
+
+        if not subs:
+            return {
+                "subscription_context": f"No subscriptions found for {ticket.customer_email}.",
+                "subscription_used": True,
+            }
+
+        lines = []
+        for sub in subs:
+            addr = sub.address or {}
+            addr_bits = ", ".join(
+                p
+                for p in [
+                    addr.get("address1"),
+                    addr.get("city"),
+                    addr.get("state"),
+                    addr.get("zip"),
+                ]
+                if p
+            )
+            freq = (
+                f"every {sub.frequency_count} {sub.frequency_unit}"
+                if sub.frequency_unit
+                else "frequency unknown"
+            )
+            lines.append(
+                f"- id={sub.id} provider={sub.provider} status={sub.status} "
+                f"title={sub.title} qty={sub.quantity} price={sub.price} "
+                f"next_charge={sub.next_charge_date} frequency={freq}"
+                + (f" ship_to={addr_bits}" if addr_bits else "")
+            )
+        block = "Subscriptions for this customer:\n" + "\n".join(lines)
+        return {"subscription_context": block, "subscription_used": True}
+
     async def generate_response(state: AgentState) -> dict[str, Any]:
         suggestion = await response_engine.generate_suggestion(
             state["ticket"],
             state["classification"],
             order_context=state["order_context"],
             knowledge_context=state["knowledge_context"],
+            subscription_context=state.get("subscription_context"),
             history=state["history"],
         )
         if state["customer_message_count"] >= REPEAT_CONTACT_ESCALATION_THRESHOLD:
@@ -246,6 +329,7 @@ def build_agent_graph(classifier, response_engine, shopify):
         ("apply_escalation", apply_escalation),
         ("fetch_order_context", fetch_order_context),
         ("fetch_knowledge_context", fetch_knowledge_context),
+        ("fetch_subscription_context", fetch_subscription_context),
         ("generate_response", generate_response),
         ("decide_auto_send", decide_auto_send),
         ("save_results", save_results),
@@ -259,7 +343,8 @@ def build_agent_graph(classifier, response_engine, shopify):
     workflow.add_edge("classify_ticket", "apply_escalation")
     workflow.add_edge("apply_escalation", "fetch_order_context")
     workflow.add_edge("fetch_order_context", "fetch_knowledge_context")
-    workflow.add_edge("fetch_knowledge_context", "generate_response")
+    workflow.add_edge("fetch_knowledge_context", "fetch_subscription_context")
+    workflow.add_edge("fetch_subscription_context", "generate_response")
     workflow.add_edge("generate_response", "decide_auto_send")
     workflow.add_edge("decide_auto_send", "save_results")
     workflow.add_edge("save_results", END)

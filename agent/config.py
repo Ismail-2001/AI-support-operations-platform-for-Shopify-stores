@@ -38,6 +38,41 @@ class Settings(BaseSettings):
     GORGIAS_API_KEY: SecretStr | None = None
     GORGIAS_WEBHOOK_SECRET: str | None = None  # shared secret checked on the Gorgias webhook
 
+    # --- Subscriptions (Recharge / Skio) ---
+    # Recharge admin REST API — header X-Recharge-Access-Token.
+    # https://developer.rechargepayments.com
+    RECHARGE_API_TOKEN: SecretStr | None = None
+    # Skio GraphQL API — header "authorization: API <token>".
+    # https://code.skio.com
+    SKIO_API_TOKEN: SecretStr | None = None
+    # Which provider manages this store's subscriptions: "auto" (first connected wins:
+    # recharge then skio), "recharge", or "skio". Set explicitly when both are connected.
+    SUBSCRIPTION_PROVIDER: str = "auto"
+    # Recharge exposes no pause endpoint — pause is implemented as "push the next
+    # charge out by N days", the same reschedule mechanism the Recharge portal uses.
+    SUBSCRIPTION_PAUSE_DAYS: int = 30
+
+    # --- Return labels (ShipEngine) ---
+    # https://docs.shipstation.com/apis/shipengine — header API-Key.
+    SHIPENGINE_API_KEY: SecretStr | None = None
+    # Return window measured from the order's created_at date.
+    RETURN_WINDOW_DAYS: int = 30
+    # Where prepaid return labels ship TO (the store's return address). Required for
+    # rate quotes and label purchase — checked at request time, not at boot.
+    RETURN_ADDRESS_NAME: str | None = None
+    RETURN_ADDRESS1: str | None = None
+    RETURN_ADDRESS2: str | None = None
+    RETURN_CITY: str | None = None
+    RETURN_STATE: str | None = None
+    RETURN_ZIP: str | None = None
+    RETURN_COUNTRY: str = "US"
+    RETURN_PHONE: str | None = None
+    # Fallback package dimensions for rate estimates when the order has no weight data.
+    RETURN_PACKAGE_WEIGHT_OZ: float = 16.0
+    RETURN_PACKAGE_LENGTH_IN: float = 10.0
+    RETURN_PACKAGE_WIDTH_IN: float = 8.0
+    RETURN_PACKAGE_HEIGHT_IN: float = 4.0
+
     # --- Generic inbound channel webhook (WhatsApp/chat-widget/etc via /webhooks/inbound) ---
     INBOUND_WEBHOOK_SECRET: str | None = None
 
@@ -76,7 +111,10 @@ class Settings(BaseSettings):
     AUTO_SEND_ENABLED: bool = False  # if False, every reply is a draft awaiting human approval
     AUTO_SEND_MIN_CONFIDENCE: float = 0.85
     AUTO_SEND_BLOCKED_CATEGORIES: str = (
-        "refund,complaint,legal,other"  # comma-separated, never auto-sent
+        # comma-separated, never auto-sent. "subscription" is blocked because the reply
+        # can't verify provider state — pauses/cancels always carry a suggested_action
+        # (which is independently hard-blocked in graph.decide_auto_send).
+        "refund,complaint,legal,other,subscription"
     )
     # Per-category confidence floors — the global AUTO_SEND_MIN_CONFIDENCE above is the
     # fallback for categories not listed here. Tunable per tenant via .env, no code change.

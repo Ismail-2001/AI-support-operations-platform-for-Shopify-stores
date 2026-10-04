@@ -29,7 +29,7 @@ from agent.utils import redact_pii
 
 logger = structlog.get_logger(__name__)
 
-PROMPT_VERSION = "classifier_v1"
+PROMPT_VERSION = "classifier_v2"
 
 
 SYSTEM_PROMPT = """You are a senior ecommerce customer support triage specialist.
@@ -50,6 +50,12 @@ Category guide:
   or is past the expected delivery date.
 - returns: Customer wants to send an item back.
 - refund: Customer asking for their money back.
+- subscription: Customer asking about or requesting a change to a RECURRING
+  subscription managed by a subscription app (Recharge/Skio) — pause, skip an
+  order, cancel, change delivery frequency, update the address or payment method
+  on a subscription, "when am I next billed", "why was I charged again".
+  Ordinary one-off order questions are NOT subscription, even if the customer
+  says the word "subscription" loosely — use the recurring-app signal.
 - product_question: Pre-sale question about a product feature, size, or compatibility.
 - complaint: General dissatisfaction with the product or service that doesn't fit clearly
   into returns/refund.

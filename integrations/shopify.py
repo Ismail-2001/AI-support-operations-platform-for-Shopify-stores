@@ -66,14 +66,17 @@ def _log_retry_attempt(retry_state) -> None:
 
 
 class ShopifyClient:
-    def __init__(self):
-        self.enabled = bool(settings.SHOPIFY_SHOP_DOMAIN and settings.SHOPIFY_ACCESS_TOKEN)
+    def __init__(self, shop_domain: str | None = None, access_token: str | None = None):
+        # Overrides let a per-store agent instance target a different shop while
+        # the process default keeps coming from settings (see agent/storage.py stores).
+        domain = shop_domain or settings.SHOPIFY_SHOP_DOMAIN
+        token = access_token or settings.SHOPIFY_ACCESS_TOKEN
+        self.enabled = bool(domain and token)
         if self.enabled:
-            self.base_url = (
-                f"https://{settings.SHOPIFY_SHOP_DOMAIN}/admin/api/{settings.SHOPIFY_API_VERSION}"
-            )
+            self.base_url = f"https://{domain}/admin/api/{settings.SHOPIFY_API_VERSION}"
+            secret = token.get_secret_value() if hasattr(token, "get_secret_value") else str(token)
             self.headers = {
-                "X-Shopify-Access-Token": settings.SHOPIFY_ACCESS_TOKEN.get_secret_value(),
+                "X-Shopify-Access-Token": secret,
                 "Content-Type": "application/json",
             }
 
@@ -376,6 +379,38 @@ class ShopifyClient:
                 raise ValueError(f"Shopify rejected the address update: {detail}")
             resp.raise_for_status()
             return resp.json()
+
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def tag_order(self, order_id: str, tag: str) -> dict[str, Any]:
+        """Add a tag to an order (idempotent — returns the order untouched when the
+        tag is already there). Used by best-effort annotations like
+        'return-label-created'; callers must never fail an action because of this."""
+        if not self.enabled:
+            raise ShopifyNotConfigured("Shopify credentials not set in .env")
+
+        async with httpx.AsyncClient(timeout=20) as client:
+            order_resp = await client.get(
+                f"{self.base_url}/orders/{order_id}.json", headers=self.headers
+            )
+            if order_resp.status_code == 404:
+                raise ValueError(f"Order {order_id} not found in Shopify")
+            order_resp.raise_for_status()
+            order = order_resp.json().get("order", {})
+            existing = [t.strip() for t in str(order.get("tags") or "").split(",") if t.strip()]
+            if tag in existing:
+                return order
+
+            resp = await client.put(
+                f"{self.base_url}/orders/{order_id}.json",
+                headers=self.headers,
+                json={"order": {"id": order_id, "tags": ", ".join([*existing, tag])}},
+            )
+            resp.raise_for_status()
+            return resp.json().get("order", {})
 
     @retry(
         retry=retry_if_exception(_is_timeout_or_connection_error),

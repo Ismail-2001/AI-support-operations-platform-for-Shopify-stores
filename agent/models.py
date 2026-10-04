@@ -15,6 +15,7 @@ class TicketCategory(str, Enum):
     PRODUCT_QUESTION = "product_question"
     COMPLAINT = "complaint"
     TECHNICAL = "technical"
+    SUBSCRIPTION = "subscription"
     OTHER = "other"
 
 
@@ -105,11 +106,21 @@ class ResponseSuggestion(BaseModel):
     suggested_action: SuggestedAction | None = None
 
 
+class SubscriptionOperation(str, Enum):
+    PAUSE = "pause"
+    SKIP = "skip"
+    CANCEL = "cancel"
+    UPDATE_ADDRESS = "update_address"
+    CHANGE_FREQUENCY = "change_frequency"
+
+
 class ActionType(str, Enum):
     REFUND = "refund"
     RESEND_ORDER = "resend_order"
     CANCEL_ORDER = "cancel_order"
     EDIT_ADDRESS = "edit_address"
+    SUBSCRIPTION_ACTION = "subscription_action"
+    RETURN_LABEL = "return_label"
     NONE = "none"
 
 
@@ -122,6 +133,14 @@ class SuggestedAction(BaseModel):
     address: dict[str, str] | None = None
     # For refund: scope the refund to specific line items (partial / item-level).
     refund_line_items: list[dict[str, Any]] | None = None
+    # For subscription_action: which provider operation a human should approve.
+    subscription_id: str | None = None
+    subscription_provider: str | None = None  # "recharge" | "skio"
+    subscription_operation: SubscriptionOperation | None = None
+    # For subscription_action/change_frequency: {"unit": "week", "count": 2}.
+    frequency: dict[str, Any] | None = None
+    # For return_label: scope the return to specific line items (partial return).
+    return_line_items: list[dict[str, Any]] | None = None
     # Actions are ALWAYS human-approved regardless of response confidence - see
     # api/customer_support.py's /actions/* endpoints. This flag is informational only.
     requires_approval: bool = True
@@ -151,6 +170,7 @@ class AgentDecision(BaseModel):
     suggestion: ResponseSuggestion
     order_context_used: bool
     kb_used: bool = False
+    subscription_used: bool = False
     auto_sent: bool
 
 

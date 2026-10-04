@@ -90,6 +90,22 @@ CREATE TABLE IF NOT EXISTS action_audit (
     created_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS return_label_audit (
+    idempotency_key TEXT PRIMARY KEY,
+    ticket_id TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    status TEXT NOT NULL,           -- 'succeeded' or 'failed'
+    provider TEXT,                  -- 'shipengine'
+    label_id TEXT,
+    label_url TEXT,
+    tracking_number TEXT,
+    carrier_service TEXT,
+    cost_usd REAL,
+    request_json TEXT,              -- what the human approved (line items, rma)
+    error TEXT,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS processed_webhook_events (
     event_id TEXT NOT NULL,
     source TEXT NOT NULL,
@@ -186,7 +202,7 @@ def storage_is_ephemeral(db_path: str | None = None) -> bool:
 
 class TicketStore:
     # Bump this when you add a migration. Each migration runs in order only once.
-    SCHEMA_VERSION = 3
+    SCHEMA_VERSION = 4
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
@@ -227,6 +243,7 @@ class TicketStore:
             1: self._migrate_v1,
             2: self._migrate_v2,
             3: self._migrate_v3,
+            4: self._migrate_v4,
         }
 
         for version in sorted(migrations.keys()):
@@ -269,6 +286,28 @@ class TicketStore:
         columns = [row[1] for row in await cursor.fetchall()]
         if "detail" not in columns:
             await db.execute("ALTER TABLE refund_audit ADD COLUMN detail TEXT")
+
+    async def _migrate_v4(self, db):
+        """v4: return_label_audit — idempotent audit trail for generated return labels.
+        (Created by the _SCHEMA script on every boot; kept as an explicit version so
+        pre-existing DBs record that they passed this point.)"""
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS return_label_audit (
+                idempotency_key TEXT PRIMARY KEY,
+                ticket_id TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                status TEXT NOT NULL,
+                provider TEXT,
+                label_id TEXT,
+                label_url TEXT,
+                tracking_number TEXT,
+                carrier_service TEXT,
+                cost_usd REAL,
+                request_json TEXT,
+                error TEXT,
+                created_at TEXT NOT NULL
+            )"""
+        )
 
     async def save(
         self,
@@ -682,6 +721,72 @@ class TicketStore:
                     json.dumps(request),
                     status,
                     json.dumps(shopify_response) if shopify_response else None,
+                    error,
+                    now,
+                ),
+            )
+            await db.commit()
+
+    async def get_return_label_audit(self, idempotency_key: str) -> dict[str, Any] | None:
+        """If this idempotency key was already processed, return the stored label result
+        instead of buying a second (paid) return label."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute(
+                "SELECT * FROM return_label_audit WHERE idempotency_key = ?", (idempotency_key,)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                return None
+            return {
+                "idempotency_key": row["idempotency_key"],
+                "ticket_id": row["ticket_id"],
+                "order_id": row["order_id"],
+                "status": row["status"],
+                "provider": row["provider"],
+                "label_id": row["label_id"],
+                "label_url": row["label_url"],
+                "tracking_number": row["tracking_number"],
+                "carrier_service": row["carrier_service"],
+                "cost_usd": row["cost_usd"],
+                "request": json.loads(row["request_json"]) if row["request_json"] else None,
+                "error": row["error"],
+                "created_at": row["created_at"],
+            }
+
+    async def record_return_label_audit(
+        self,
+        idempotency_key: str,
+        ticket_id: str,
+        order_id: str,
+        status: str,
+        provider: str | None = None,
+        label_id: str | None = None,
+        label_url: str | None = None,
+        tracking_number: str | None = None,
+        carrier_service: str | None = None,
+        cost_usd: float | None = None,
+        request: dict[str, Any] | None = None,
+        error: str | None = None,
+    ) -> None:
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO return_label_audit (idempotency_key, ticket_id, order_id, status, "
+                "provider, label_id, label_url, tracking_number, carrier_service, cost_usd, "
+                "request_json, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    idempotency_key,
+                    ticket_id,
+                    order_id,
+                    status,
+                    provider,
+                    label_id,
+                    label_url,
+                    tracking_number,
+                    carrier_service,
+                    cost_usd,
+                    json.dumps(request) if request else None,
                     error,
                     now,
                 ),

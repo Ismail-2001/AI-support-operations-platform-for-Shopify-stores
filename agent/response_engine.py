@@ -19,6 +19,7 @@ from agent.models import (
     ActionType,
     ClassificationResult,
     ResponseSuggestion,
+    SubscriptionOperation,
     SuggestedAction,
     SupportTicket,
     TicketMessage,
@@ -29,7 +30,23 @@ from agent.utils import redact_pii
 
 logger = structlog.get_logger(__name__)
 
-PROMPT_VERSION = "response_v1"
+PROMPT_VERSION = "response_v2"
+
+
+def _safe_subscription_operation(ticket_id: str, raw: str | None) -> SubscriptionOperation | None:
+    """Map the model's operation string, dropping unknown values instead of
+    letting an invented operation reach the approval endpoint."""
+    if not raw:
+        return None
+    try:
+        return SubscriptionOperation(raw.strip().lower())
+    except ValueError:
+        logger.warning(
+            "unknown_subscription_operation",
+            ticket_id=ticket_id,
+            raw_operation=raw,
+        )
+        return None
 
 
 SYSTEM_PROMPT = """You are drafting a customer support reply for an ecommerce brand.
@@ -65,6 +82,26 @@ Rules:
   already shipped, don't suggest cancel/edit — explain the situation honestly instead.
 - For a partial refund (one item in a multi-item order, or a goodwill amount), set type="refund"
   with the reduced `amount` — the human approves the final number anyway.
+- SUBSCRIPTIONS: if the category is subscription and subscription data is provided below, ground
+  every claim about billing/dates/state in THAT data exactly — never invent a next-charge date or
+  status. If the customer asks you to PAUSE, SKIP, CANCEL, change delivery FREQUENCY, change the
+  shipping ADDRESS on a subscription, set suggested_action with type="subscription_action" and:
+    - subscription_operation: one of "pause", "skip", "cancel", "update_address", "change_frequency"
+    - subscription_id: the id from the subscription data (REQUIRED for every subscription action)
+    - subscription_provider: "recharge" or "skio" (whichever the data says)
+    - for change_frequency: frequency = {"unit": "day"|"week"|"month", "count": <integer>}
+    - for update_address: address = the corrected fields (same shape as edit_address)
+    - reason: a one-line summary of the customer's request
+  If the customer asks to update a PAYMENT METHOD or billing card, do NOT suggest a subscription
+  action — card data must never be handled in chat; explain they update it in their subscription
+  portal (you may link a portal/magic link if one is provided below) and set confidence LOW.
+  If subscription data is absent or says the app isn't connected, be honest that you can't see
+  it — never claim an action was done.
+- RETURNS: if the customer wants to return an item and the order is eligible (see any return
+  context below), set type="return_label" with the order_id and return_line_items (item name +
+  quantity for partial returns; omit for the full order) — a human approves and the label is
+  generated. Never claim a label has been created yet.
+- NEVER collect or repeat full payment card numbers, CVVs, or bank details back to the customer.
 - confidence should be LOW (below 0.6) if: order data is missing/ambiguous, the customer is very
   upset, the request involves money leaving the business (refund/discount), a policy question has
   no matching knowledge base content, or you are unsure the reply fully answers the question.
@@ -77,13 +114,26 @@ Rules:
 class _RawSuggestedAction(BaseModel):
     type: str = Field(
         default="none",
-        description="'refund', 'resend_order', 'cancel_order', 'edit_address', or 'none'",
+        description=(
+            "'refund', 'resend_order', 'cancel_order', 'edit_address', "
+            "'subscription_action', 'return_label', or 'none'"
+        ),
     )
     order_id: str | None = None
     amount: float | None = None
     reason: str | None = None
     address: dict[str, str] | None = None
     refund_line_items: list[dict[str, Any]] | None = None
+    subscription_id: str | None = None
+    subscription_provider: str | None = Field(default=None, description='"recharge" or "skio"')
+    subscription_operation: str | None = Field(
+        default=None,
+        description='"pause", "skip", "cancel", "update_address", or "change_frequency"',
+    )
+    frequency: dict[str, Any] | None = Field(
+        default=None, description='e.g. {"unit": "week", "count": 2} for change_frequency'
+    )
+    return_line_items: list[dict[str, Any]] | None = None
 
 
 class _RawSuggestion(BaseModel):
@@ -143,10 +193,15 @@ class ResponseGenerationEngine:
         classification: ClassificationResult,
         order_context: str | None = None,
         knowledge_context: str | None = None,
+        subscription_context: str | None = None,
         history: list[TicketMessage] | None = None,
     ) -> ResponseSuggestion:
         order_block = order_context or "No order data available for this ticket."
         kb_block = knowledge_context or "No knowledge base content found for this query."
+        sub_block = subscription_context or (
+            "No subscription data available for this ticket (subscription app not involved "
+            "or not connected)."
+        )
         transcript = format_transcript(history) if history else f"Customer: {ticket.body}"
         redacted_transcript = redact_pii(transcript)
         redacted_customer = redact_pii(ticket.customer_name or ticket.customer_email)
@@ -163,6 +218,7 @@ class ResponseGenerationEngine:
                 f"priority={classification.priority.value}, sentiment={classification.sentiment.value}\n\n"
                 f"Order context:\n{order_block}\n\n"
                 f"Knowledge base context:\n{kb_block}\n\n"
+                f"Subscription context:\n{sub_block}\n\n"
                 f"Draft the next reply.",
             ),
         ]
@@ -191,7 +247,7 @@ class ResponseGenerationEngine:
         requires_review = (
             parsed.requires_human_review
             or parsed.confidence < 0.85
-            or classification.category.value in {"refund", "complaint"}
+            or classification.category.value in {"refund", "complaint", "subscription"}
             or classification.sentiment.value == "very_negative"
             or has_action
         )
@@ -217,6 +273,13 @@ class ResponseGenerationEngine:
                     reason=parsed.suggested_action.reason,
                     address=parsed.suggested_action.address,
                     refund_line_items=parsed.suggested_action.refund_line_items,
+                    subscription_id=parsed.suggested_action.subscription_id,
+                    subscription_provider=parsed.suggested_action.subscription_provider,
+                    subscription_operation=_safe_subscription_operation(
+                        ticket.id, parsed.suggested_action.subscription_operation
+                    ),
+                    frequency=parsed.suggested_action.frequency,
+                    return_line_items=parsed.suggested_action.return_line_items,
                 )
                 has_action = True
             else:
@@ -242,6 +305,7 @@ class ResponseGenerationEngine:
                 "transcript": redacted_transcript,
                 "order_context": order_block,
                 "knowledge_context": kb_block,
+                "subscription_context": sub_block,
                 "classification": classification.model_dump(mode="json"),
             },
             output_summary=suggestion.model_dump(mode="json"),
