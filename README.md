@@ -6,12 +6,12 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
-[![LangGraph](https://img.shields.io/badge/LangGraph-0.3-1C3C3C?logo=langchain)](https://langchain-ai.github.io/langgraph/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.142-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C?logo=langchain)](https://langchain-ai.github.io/langgraph/)
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-180%2B%20Python%20%7C%2067%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
+[![Tests](https://img.shields.io/badge/Tests-183%20Python%20%7C%2067%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -258,8 +258,8 @@ sequenceDiagram
 | Layer | Technology | Purpose |
 |---|---|---|
 | **Runtime** | Python 3.12+ | Core application language |
-| **API Framework** | FastAPI 0.115 | Async REST + webhook endpoints |
-| **LLM Orchestration** | LangGraph 0.3 | State machine for agent pipeline |
+| **API Framework** | FastAPI 0.142 | Async REST + webhook endpoints |
+| **LLM Orchestration** | LangGraph 1.2 | State machine for agent pipeline |
 | **LLM Provider** | OpenRouter (gpt-4o-mini) | Primary — eval-validated (15/15) |
 | **LLM Secondary** | Groq (llama-3.3-70b) | Second in chain — re-run evals when switching |
 | **LLM Tertiary** | Google Gemini | Third in chain |
@@ -270,7 +270,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 180 Python + 67 frontend tests |
+| **Testing** | Pytest + Vitest | 183 Python + 67 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -554,10 +554,18 @@ The eval dataset includes **2 adversarial prompt-injection cases** that verify t
 ```yaml
 # .github/workflows/ci.yml — On every push to main:
   1. Ruff lint + format check
-  2. pytest tests/ -v
-  3. Dashboard: tsc --noEmit + vitest + vite build
-  4. Docker image build (no push)
+  2. pip-audit -r requirements.lock   # fails on any known Python CVE
+  3. pytest tests/ -v
+  4. Dashboard: npm audit (runtime, blocking) + tsc --noEmit + vitest + vite build
+  5. Docker image build (no push)
 ```
+
+### Dependency Security
+
+- **`requirements.lock`** — exact transitive pins, generated from a fresh venv via `pip freeze`. CI audits it with `pip-audit` on every push; regenerate after editing `requirements*.txt` (command in the file header).
+- **Python: 0 known CVEs** (`pip-audit` clean — FastAPI 0.142 / Starlette 1.7, langchain + langgraph 1.x, dotenv 1.2.4, cryptography 50).
+- **Dashboard runtime: 0 known CVEs** (`npm audit --omit=dev` clean — blocking in CI).
+- **Known dev-only residual:** `tailwindcss@3.4.19` pulls a `braces`/`micromatch`/`chokidar` DoS chain with no fix inside v3 — reported informationally in CI. Clearing it requires a Tailwind v4 migration; none of it ships in the built bundle.
 
 ---
 

@@ -1,12 +1,15 @@
 # Dev/test dependencies. Installs the app's runtime deps first, then test tooling.
 -r requirements.txt
 
-pytest==8.3.3
-pytest-asyncio==0.24.0
+pytest==9.1.1
+pytest-asyncio==1.4.0
 pytest-cov==6.0.0
 
 # Linting & formatting
 ruff==0.6.9
+
+# Dependency security audit (CI runs: pip-audit -r requirements.lock)
+pip-audit==2.10.1
 
 # Pre-commit hooks
 pre-commit==3.8.0

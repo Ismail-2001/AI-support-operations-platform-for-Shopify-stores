@@ -53,6 +53,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Dependency security audit (pip-audit)
+        run: pip-audit -r requirements.lock
+
       - name: Run tests
         env:
           ENV: test
@@ -84,6 +87,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Dependency security audit (npm, runtime — blocking)
+        run: npm audit --omit=dev --audit-level=high
+
+      - name: Dependency security audit (npm, full — informational)
+        run: npm audit --audit-level=high || echo "::warning::dev-tooling audit findings (tailwindcss@3 braces chain; fix requires tailwind v4 migration)"
 
       - name: TypeScript check
         run: npx tsc --noEmit
