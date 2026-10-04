@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse
 
 from agent.config import settings
 from agent.knowledge_base import knowledge_base
-from agent.storage import store
+from agent.storage import storage_is_ephemeral, store
 from api.customer_support import public_router, webhook_router
 from api.customer_support import router as support_router
 from api.errors import APIError
@@ -178,6 +178,11 @@ async def health():
     checks["shopify"] = "connected" if shopify.enabled else "not_configured"
     checks["gorgias"] = "connected" if gorgias.enabled else "not_configured"
     checks["auto_send"] = "enabled" if settings.AUTO_SEND_ENABLED else "disabled"
+
+    # Storage persistence — "ephemeral" means data is wiped on the next
+    # deploy/restart (Render without an attached disk). Informational only:
+    # it does not flip overall status, so free-tier demos still read healthy.
+    checks["storage"] = "ephemeral" if storage_is_ephemeral() else "persistent"
 
     overall = "healthy" if checks["database"] == "ok" else "degraded"
 

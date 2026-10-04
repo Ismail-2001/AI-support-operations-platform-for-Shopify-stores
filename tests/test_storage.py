@@ -286,3 +286,28 @@ async def test_calibration_report_flags_miscalibration(test_store):
     assert (
         high_bucket["edit_rate"] == 1.0
     ), "a 100% edit rate at 0.9 confidence must be visible, not hidden"
+
+
+# -- Storage persistence (ephemeral detection) ----------------
+
+
+async def test_storage_is_ephemeral_flags_render_and_tmp_paths():
+    from agent.storage import storage_is_ephemeral
+
+    # Render free plan (working dir, no attached disk) + temp dirs = ephemeral
+    assert storage_is_ephemeral("/opt/render/project/src/cs_agent.db") is True
+    assert storage_is_ephemeral("/tmp/cs_agent.db") is True
+    assert storage_is_ephemeral("/var/tmp/cs_agent.db") is True
+    # Attached disk path = persistent
+    assert storage_is_ephemeral("/var/data/cs_agent.db") is False
+    # Relative default resolved against a non-Render cwd = persistent
+    assert storage_is_ephemeral("cs_agent.db") is False
+
+
+async def test_ticket_store_creates_parent_directory(tmp_path):
+    from agent.storage import TicketStore
+
+    db_file = tmp_path / "attached-disk" / "cs_agent.db"
+    store_obj = TicketStore(db_path=str(db_file))
+    assert db_file.parent.is_dir(), "DB_PATH parent dir must exist before first connect"
+    assert store_obj.db_path == str(db_file)

@@ -13,7 +13,7 @@ import { KnowledgeBasePage } from "./pages/KnowledgeBasePage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
 
-type Health = { shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean } | null;
+type Health = { shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean; storage_persistent: boolean } | null;
 
 export default function App() {
   const { connection, setConnection } = useConnection();

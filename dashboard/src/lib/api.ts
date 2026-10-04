@@ -40,7 +40,7 @@ async function request<T>(conn: Connection, path: string, init?: RequestInit): P
 }
 
 export const api = {
-  health: (conn: Connection) => request<{ status: string; shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean }>(conn, "/support/health"),
+  health: (conn: Connection) => request<{ status: string; shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean; storage_persistent: boolean }>(conn, "/support/health"),
 
   listTickets: (conn: Connection, params?: { status?: string; category?: string; priority?: string; page?: number }) => {
     const q = new URLSearchParams();

@@ -7,6 +7,8 @@ MVP, not as your permanent system of record).
 
 import builtins
 import json
+import os
+from contextlib import suppress
 from datetime import UTC, datetime
 from typing import Any
 
@@ -136,12 +138,42 @@ def _ticket_filters(
     return " AND ".join(clauses), params
 
 
+# Locations known to be wiped on redeploy/restart:
+#  - /opt/render — Render web services without an attached disk (free plan)
+#  - /tmp, /var/tmp — temp directories
+_EPHEMERAL_DB_PREFIXES = ("/opt/render/", "/tmp/", "/var/tmp/")
+
+
+def storage_is_ephemeral(db_path: str | None = None) -> bool:
+    """True when the DB file sits somewhere known to be wiped on redeploy.
+
+    Flags Render working-directory paths (no attached disk) and temp dirs so
+    /health can report `storage: ephemeral`. Local dev, attached disks
+    (/var/data/...), and named Docker volumes are NOT flagged. A Docker
+    container *without* a volume still loses data on recreate — that is not
+    detectable from inside the process, so use `docker compose` (which
+    declares volumes) or an attached disk in production."""
+    raw = db_path or settings.DB_PATH
+    # Check both the raw path (POSIX-style values like /opt/render/... are
+    # compared verbatim, so behaviour is identical on Windows dev machines)
+    # and the resolved absolute path (catches relative DB_PATH on Render).
+    candidates = {raw.replace("\\", "/")}
+    with suppress(OSError, ValueError):
+        candidates.add(os.path.abspath(raw).replace("\\", "/"))
+    return any(c.startswith(_EPHEMERAL_DB_PREFIXES) for c in candidates)
+
+
 class TicketStore:
     # Bump this when you add a migration. Each migration runs in order only once.
     SCHEMA_VERSION = 2
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
+        # Create the parent directory up front so DB_PATH pointing at a fresh
+        # attached-disk mount (e.g. /var/data/cs_agent.db) works on first boot.
+        parent = os.path.dirname(os.path.abspath(self.db_path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
 
     async def init(self):
         async with aiosqlite.connect(self.db_path) as db:

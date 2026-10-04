@@ -140,6 +140,44 @@ Separate Render **Static Site**:
 
 ---
 
+## 🗄️ Production Storage (paying clients)
+
+**Free/demo → SQLite on the working directory is fine.** Data loss on deploy
+is acceptable while you are evaluating.
+
+**Paying client → persistent storage is a go-live blocker.** Do this before
+handing over credentials:
+
+### Option A — Render attached disk (SQLite, smallest change)
+
+1. In `render.yaml`: set `plan: starter` (disks require Starter+ / $7 mo).
+2. In `render.yaml`: uncomment the `disk:` block (mounts `/var/data`, 1 GB).
+3. In `render.yaml`: set `DB_PATH=/var/data/cs_agent.db`
+   (absolute paths are used verbatim; parent dir is created on boot).
+4. Redeploy, then verify:
+
+```bash
+curl https://cs-agent-xxxx.onrender.com/health
+# -> "storage": "persistent"   ✅  (NOT "ephemeral")
+```
+
+The dashboard Settings page also shows a warning banner while storage is
+ephemeral — it must be gone before go-live.
+
+### Option B — Postgres (Supabase/Neon) for larger deployments
+
+Postgres is **not implemented yet** (storage is isolated behind
+`agent/storage.py` to make the swap straightforward). Until it lands, use
+Option A and avoid multi-worker setups — SQLite needs a single writer.
+
+| Check | Free/demo | Paying client |
+|---|---|---|
+| `checks.storage` in `/health` | `"ephemeral"` OK | must be `"persistent"` |
+| Backup story | none needed | export `DB_PATH` file regularly (cron / Render scheduled job) |
+| `AUTO_SEND_ENABLED` | `false` | `false` until 1–2 weeks of reviewed drafts |
+
+---
+
 ## Troubleshooting
 
 | Symptom | Check |

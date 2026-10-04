@@ -82,6 +82,17 @@ def test_health_endpoints_require_no_api_key(client):
     assert c.get("/support/health").status_code == 200
 
 
+def test_health_reports_storage_persistence(client):
+    """/health must flag ephemeral storage (Render w/o disk) vs persistent."""
+    c, _ = client
+    checks = c.get("/health").json()["checks"]
+    assert checks["storage"] in {"persistent", "ephemeral"}
+
+    support_health = c.get("/support/health").json()
+    assert isinstance(support_health["storage_persistent"], bool)
+    assert support_health["storage_persistent"] == (checks["storage"] == "persistent")
+
+
 def test_gorgias_webhook_rejects_missing_secret(client):
     c, _ = client
     r = c.post("/support/webhooks/gorgias/ticket-created", json={"ticket": {"id": 1}})

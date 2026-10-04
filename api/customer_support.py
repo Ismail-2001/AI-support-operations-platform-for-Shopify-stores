@@ -21,7 +21,7 @@ from agent.models import (
     TicketChannel,
 )
 from agent.rate_limit import rate_limit_default, rate_limit_refund, rate_limit_resend
-from agent.storage import store
+from agent.storage import storage_is_ephemeral, store
 from agent.support_agent import CustomerSupportAgent
 from api.errors import (
     APIError,
@@ -809,5 +809,6 @@ async def customer_support_health():
         "shopify_connected": _agent.shopify.enabled,
         "gorgias_connected": _gorgias.enabled,
         "auto_send_enabled": settings.AUTO_SEND_ENABLED,
+        "storage_persistent": not storage_is_ephemeral(),
         "timestamp": datetime.now(UTC).isoformat(),
     }

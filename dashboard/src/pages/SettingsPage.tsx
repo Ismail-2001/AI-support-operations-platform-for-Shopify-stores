@@ -1,11 +1,16 @@
 import { useState } from "react";
-import { Eye, EyeOff, RefreshCw, Check, ExternalLink } from "lucide-react";
+import { Eye, EyeOff, RefreshCw, Check, ExternalLink, AlertTriangle } from "lucide-react";
 import { useTheme } from "../lib/ThemeProvider";
 import type { Connection } from "../lib/api";
 
 interface Props {
   connection: Connection;
-  health: { shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean } | null;
+  health: {
+    shopify_connected: boolean;
+    gorgias_connected: boolean;
+    auto_send_enabled: boolean;
+    storage_persistent: boolean;
+  } | null;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -55,6 +60,22 @@ export function SettingsPage({ connection, health }: Props) {
         <h1 className="font-display text-3xl text-ink-900 dark:text-ink-dark-900">Settings</h1>
       </header>
 
+      {health && health.storage_persistent === false && (
+        <div className="mb-6 flex items-start gap-3 rounded-xl2 border border-gold/40 bg-gold-100 dark:bg-gold/10 px-4 py-3">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-gold-700 dark:text-gold" />
+          <div>
+            <p className="text-sm font-medium text-gold-700 dark:text-gold">
+              Ephemeral storage detected
+            </p>
+            <p className="text-xs text-ink-600 dark:text-ink-dark-600 mt-1">
+              The database lives on a disk that is wiped on every deploy or restart (e.g. Render free
+              plan). Fine for demos — before a paying client goes live, attach a persistent disk —
+              see DEPLOYMENT_CHECKLIST.md → Production Storage.
+            </p>
+          </div>
+        </div>
+      )}
+
       <Section title="Connection">
         <Field label="API base URL">
           <span className="text-sm font-mono text-ink-600 dark:text-ink-dark-600">{connection.baseUrl}</span>
@@ -85,6 +106,16 @@ export function SettingsPage({ connection, health }: Props) {
           <Badge
             ok={!health?.auto_send_enabled}
             label={health?.auto_send_enabled ? "Auto-send — on" : "Review mode — you approve each reply"}
+          />
+        </Field>
+        <Field label="Storage">
+          <Badge
+            ok={health?.storage_persistent !== false}
+            label={
+              health?.storage_persistent === false
+                ? "Ephemeral — wiped on deploy"
+                : "Persistent"
+            }
           />
         </Field>
       </Section>

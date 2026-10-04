@@ -15,6 +15,20 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: uvicorn api.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
+
+    # ── Persistent disk (PAYING CLIENTS ONLY) ─────────────────────────
+    # The free plan has NO disk: SQLite lives in the working directory and
+    # is wiped on every deploy/restart (fine for demos, NOT for real data).
+    # To persist data:
+    #   1. Change `plan: free` above to `plan: starter` (disks need Starter+)
+    #   2. Uncomment the disk block below
+    #   3. Set DB_PATH=/var/data/cs_agent.db (see Storage section)
+    # Verify with GET /health -> checks.storage == "persistent"
+    # disk:
+    #   name: cs-agent-data
+    #   mountPath: /var/data
+    #   sizeGB: 1
+
     envVars:
       # ── Tenant ──────────────────────────────────────────
       - key: TENANT_NAME
@@ -61,9 +75,12 @@ services:
         value: "refund,complaint,legal,other"
 
       # ── Storage ─────────────────────────────────────────
-      # NOTE: SQLite DB is on ephemeral disk on Render free plan — data is
-      # wiped on every deploy/restart. Acceptable for MVP. Upgrade to Render
-      # Starter ($7/mo) + attached disk for persistent data.
+      # SQLite file. Relative path = service working directory (EPHEMERAL on
+      # Render free plan — wiped every deploy; OK for demos only).
+      # Paying clients: attach a disk (block above) and set:
+      #   DB_PATH=/var/data/cs_agent.db
+      # Absolute paths are used verbatim (no tenant prefix); the default
+      # relative path gets auto-prefixed with TENANT_NAME.
       - key: DB_PATH
         value: cs_agent.db
       - key: ENV

@@ -663,7 +663,26 @@ curl -X POST https://cs-agent-xxxx.onrender.com/support/knowledge-base/sync-shop
   -H "X-API-Key: YOUR_API_KEY"
 ```
 
-> **Free Tier Note:** SQLite data is ephemeral on Render's free plan — every deploy wipes ticket history. Upgrade to Render Starter ($7/mo) for a persistent disk. Suitable for MVP / evaluation.
+> **Free Tier Note:** SQLite data is ephemeral on Render's free plan — every deploy wipes ticket history. Upgrade to Render Starter ($7/mo) for a persistent disk. Suitable for MVP / evaluation. See [Production Storage](#production-storage--free-vs-paying-clients) below.
+
+### Production Storage — Free vs Paying Clients
+
+| Deployment | Storage | Survives deploys? | Action |
+|---|---|---|---|
+| Local dev / demo | SQLite (`cs_agent_<tenant>.db`) | n/a — your machine | None (default) |
+| Render **free** | SQLite in service working directory | ❌ wiped every deploy/restart | Fine for demos only — never point a paying client here |
+| Render **Starter+** | SQLite on **attached disk** | ✅ | 1. Set `plan: starter` in `render.yaml` 2. Uncomment the `disk:` block 3. Set `DB_PATH=/var/data/cs_agent.db` |
+| Production (long-term) | **Postgres** (Supabase / Neon) | ✅ | Not implemented yet — storage is isolated behind `agent/storage.py`, tracked in the roadmap |
+
+**`DB_PATH` rules**
+
+- Default (`cs_agent.db`) → auto-renamed to `cs_agent_<TENANT_NAME>.db`, so copy-pasted `.env` files never share a database.
+- Any other value — relative or absolute (e.g. `/var/data/cs_agent.db`) → used verbatim, no tenant prefix.
+- The parent directory is created on first boot, so a fresh attached-disk mount works without manual setup.
+
+**Detecting ephemeral storage:** `GET /health` reports `checks.storage` as `"persistent"` or `"ephemeral"` (flags Render's `/opt/render` working directory and `/tmp`; local dev, attached disks, and Docker volumes read `persistent`). `GET /support/health` returns `storage_persistent: true|false`, and the dashboard Settings page shows a warning banner when storage is ephemeral.
+
+> **Rule of thumb:** demos → free tier is fine. Paying client → attached disk (or Postgres) is a **go-live blocker**; verify `checks.storage == "persistent"` before handing over credentials.
 
 ### Docker
 
