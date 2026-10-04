@@ -13,6 +13,19 @@ from tests.conftest import FakeClassifier, FakeResponseEngine, FakeShopify
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _restore_store_singletons():
+    """_wire_agent() swaps agent.storage.store and agent.support_agent.store for
+    its tests. Restore both afterwards - a leaked raw TicketStore breaks
+    context-aware routing (X-Store-Id) for every later test in the session."""
+
+    orig_storage = storage_module.store
+    orig_sa = sa.store
+    yield
+    storage_module.store = orig_storage
+    sa.store = orig_sa
+
+
 def _wire_agent(test_store, classifier=None, response_engine=None, shopify=None):
     storage_module.store = test_store
     sa.store = test_store

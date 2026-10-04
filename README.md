@@ -11,7 +11,7 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-284%20Python%20%7C%2099%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
+[![Tests](https://img.shields.io/badge/Tests-337%20Python%20%7C%20117%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -85,7 +85,7 @@ One-click sync: `POST /support/knowledge-base/sync-shopify` — **incremental**:
 - **PII redaction** — emails and phone numbers masked before LLM calls
 - **Webhook body size limit** — 1 MB cap prevents memory exhaustion
 
-> 🛡️ **Proven, not promised:** [sales/SAFETY_PROOF.md](sales/SAFETY_PROOF.md) walks through four real cases from the eval harness — prompt injection forcing a $500 refund, a knowledge-base gap, an angry customer, and an order-status lookup — with the agent's actual outputs. The dataset now spans 19 golden cases (15/15 last full run; 4 new action-suggestion cases harness-verified).
+> 🛡️ **Proven, not promised:** [sales/SAFETY_PROOF.md](sales/SAFETY_PROOF.md) walks through four real cases from the eval harness — prompt injection forcing a $500 refund, a knowledge-base gap, an angry customer, and an order-status lookup — with the agent's actual outputs. The dataset now spans 23 golden cases (15/15 last full run; 4 new action-suggestion + 4 subscription cases harness-verified).
 
 ### Self-Improvement Analytics
 
@@ -123,6 +123,18 @@ Built for non-technical founders:
 
 The result card shows grounding evidence — which parts came from real Shopify order data vs. the knowledge base — plus a confidence score, before anything ships. Auto-send stays in review mode until you explicitly turn it on.
 
+### Subscription Management (Recharge & Skio)
+
+Pause, skip, cancel, change delivery frequency, or fix a subscription's shipping address — from the ticket itself. The agent reads live subscription state (next charge date, plan, address) through Recharge or Skio, drafts the operation, and a human approves it in one click. Payment-method changes are advice-only (portal link) — card data never touches chat. Same `Idempotency-Key` + audit-trail guarantees as every other action; subscriptions in the wrong state (already cancelled, no next charge to skip) fail with clear 409s.
+
+### Return Labels (ShipEngine)
+
+Returns get a policy eligibility check (refund state, fulfillment, return window, line items) plus a one-click ShipEngine return label: rates are fetched, the cheapest is bought with `is_return_label: true`, and the tracking number + PDF land on the ticket — which moves to `awaiting_customer` and gets tagged in Shopify. Missing ShipEngine or return-address config surfaces an explicit error instead of a silent failure. *Why ShipEngine over EasyPost: a first-class return-label flag on label purchase and rating + buying in one API, isolated behind `integrations/shipengine.py` so another provider can be swapped in without touching the endpoint.*
+
+### Multi-Store / Agency Mode
+
+Requests carrying an `X-Store-Id` header resolve tickets, knowledge, audits, and the agent's Shopify credentials to that store's own database file and registry entry, while `/support/stores` stays a global admin surface (credentials write-only). The dashboard ships a **Stores** page (register stores, attach shop tokens, delete) and a sidebar store switcher — switching remounts the workspace in the new context. No header = default store, so single-store deployments behave exactly as before.
+
 <details>
 <summary><b>Competitive Advantages — Why This Beats Generic Chatbots</b></summary>
 
@@ -134,7 +146,7 @@ The result card shows grounding evidence — which parts came from real Shopify 
 | **Human-before-money actions** | Hard-coded | Prompt-only | Yes | Yes |
 | **Cost cap circuit breaker** | Built-in | — | — | — |
 | **Self-improvement analytics** | Edit-rate by category | — | — | — |
-| **Prompt injection eval harness** | 15 cases + adversarial | — | — | — |
+| **Prompt injection eval harness** | 23 cases + adversarial | — | — | — |
 | **Knowledge base (RAG)** | Local SQLite (zero infra) | — | Yes | — |
 | **Open-source / self-hosted** | Full code | SaaS only | — | — |
 | **Pricing** | One-time setup + $0/mo | $0-$1000/mo | $55+/mo | $360+/mo |
@@ -289,7 +301,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 284 Python + 99 frontend tests |
+| **Testing** | Pytest + Vitest | 337 Python + 117 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -404,13 +416,28 @@ Dashboard: **http://localhost:5173**
 
 † *Gorgias credentials are only needed for the Gorgias webhook/reply loop. Without them the agent still works end-to-end through the REST API and dashboard (tickets in, drafts out).*
 
+### Integrations (Optional)
+
+| Variable | Required | Description |
+|---|---|---|
+| `RECHARGE_API_TOKEN` | Optional | Recharge admin REST API token — pause/skip/cancel/address/frequency |
+| `SKIO_API_TOKEN` | Optional | Skio GraphQL API token |
+| `SUBSCRIPTION_PROVIDER` | No | `auto` (default: Recharge, then Skio) / `recharge` / `skio` |
+| `SUBSCRIPTION_PAUSE_DAYS` | No | Recharge has no pause endpoint — pause pushes the next charge out by this many days (default `30`) |
+| `SHIPENGINE_API_KEY` | Optional | Return-label rating + purchase (ShipEngine, not EasyPost) |
+| `RETURN_WINDOW_DAYS` | No | Policy window used by return eligibility (default `30`) |
+| `RETURN_ADDRESS_*` | Optional† | Return origin: `NAME`, `1`, `2`, `CITY`, `STATE`, `ZIP`, `COUNTRY`, `PHONE` |
+| `RETURN_PACKAGE_*` | No | Label package dims: `WEIGHT_OZ`, `LENGTH_IN`, `WIDTH_IN`, `HEIGHT_IN` |
+
+† *Without ShipEngine/return-address config, subscription and return endpoints answer honestly (`configured: false` / `RETURN_ADDRESS_MISSING`) instead of failing mid-action.*
+
 ### Safety Gates
 
 | Variable | Default | Description |
 |---|---|---|
 | `AUTO_SEND_ENABLED` | `false` | Start `false` for first 1-2 weeks |
 | `AUTO_SEND_MIN_CONFIDENCE` | `0.85` | Minimum confidence to auto-send |
-| `AUTO_SEND_BLOCKED_CATEGORIES` | `refund,complaint,legal,other` | Never auto-sent |
+| `AUTO_SEND_BLOCKED_CATEGORIES` | `refund,complaint,legal,other,subscription` | Never auto-sent |
 | `DAILY_COST_CAP_USD` | `5.0` | Auto-send disabled when exceeded |
 | `AUTO_SEND_MIN_CONFIDENCE_<CATEGORY>` | per-category | Per-category threshold overrides (e.g. `..._RETURNS=0.87`, `..._ORDER_STATUS=0.88`); default `0.90`. Runtime overrides via `PUT /support/automation/thresholds`, floor `0.80` |
 | `ACTION_RATE_LIMIT_PER_MINUTE` | `10` | Rate limit on cancel/edit-address action endpoints |
@@ -451,6 +478,24 @@ Dashboard: **http://localhost:5173**
 | `POST` | `/support/tickets/{id}/actions/resend-order` | Create a replacement order in Shopify. Requires `Idempotency-Key` header. |
 | `POST` | `/support/tickets/{id}/actions/cancel` | Cancel an unfulfilled order (restocks inventory). Requires `Idempotency-Key`. 409 if already fulfilled/cancelled. |
 | `POST` | `/support/tickets/{id}/actions/edit-address` | Update shipping address before shipment. Requires `Idempotency-Key`. Audit stores old + new address. |
+| `POST` | `/support/tickets/{id}/actions/subscription` | Pause/skip/cancel/update address/change frequency via Recharge or Skio. Requires `Idempotency-Key`. Audited per operation. |
+| `GET` | `/support/tickets/{id}/subscriptions` | Normalized subscription list for the ticket's customer (`configured: false` when unconnected) |
+| `GET` | `/support/tickets/{id}/return-eligibility` | Return policy check: window, refund state, line items |
+| `POST` | `/support/tickets/{id}/actions/return-label` | Buy a ShipEngine return label (cheapest rate). Requires `Idempotency-Key`. |
+
+### Multi-Store Registry
+
+Global admin surface — these endpoints ignore any `X-Store-Id` on the request, and credentials are write-only (responses expose `has_shopify_token`, never the token).
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/support/stores` | List registered stores |
+| `POST` | `/support/stores` | Register a store (`name`, optional `shop_domain`, `shopify_access_token`) — 409 on duplicate domain |
+| `GET` | `/support/stores/{id}` | Store detail |
+| `PATCH` | `/support/stores/{id}` | Rename / attach or clear the Shopify token (invalidates the cached store context) |
+| `DELETE` | `/support/stores/{id}` | Unregister a store (per-store data file is kept on disk — no silent data destruction) |
+
+Any other endpoint called with `X-Store-Id: <id>` operates inside that store's isolated database; an unknown id returns `404 STORE_NOT_FOUND`.
 
 ### Setup Wizard
 
@@ -585,12 +630,12 @@ npm run test:watch    # Watch mode
 npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-99 tests across 12 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), and the two action-approval panels (cancel, edit address, partial refund with line-item scoping), and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
+117 tests across 15 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar (including the store switcher), ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), the two action-approval panels (cancel, edit address, partial refund with line-item scoping), the subscription and return-label approval panels, the Stores page, and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
 
 ### Eval Harness
 
 ```bash
-# Run all 19 golden cases against your configured LLM
+# Run all 23 golden cases against your configured LLM
 python -m evals.run_evals
 
 # Run a single case
@@ -601,7 +646,7 @@ python -m evals.run_evals --json report.json
 python -m evals.compare evals/results/previous.json report.json
 ```
 
-The eval dataset includes **2 adversarial prompt-injection cases** that verify the model doesn't get tricked into confirming fake refunds or overriding confidence scores, plus 4 action-suggestion cases (cancel / edit address / partial refund / delivered-order-must-not-cancel) asserting the model proposes the right `expected_action_type` and never claims an action already happened.
+The eval dataset includes **2 adversarial prompt-injection cases** that verify the model doesn't get tricked into confirming fake refunds or overriding confidence scores, 4 action-suggestion cases (cancel / edit address / partial refund / delivered-order-must-not-cancel) asserting the model proposes the right `expected_action_type` and never claims an action already happened, and 4 subscription cases asserting the model proposes the right `expected_action_operation` (pause vs skip), routes card updates to the portal with no action, and stays honest when subscription data is unavailable.
 
 ### CI Pipeline
 
@@ -673,7 +718,7 @@ cs-agent/
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
-├── tests/                      # 284 unit/integration tests
+├── tests/                      # 337 unit/integration tests
 │   ├── conftest.py             # Fixtures: temp DB, FakeClassifier, FakeShopify
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests
@@ -798,6 +843,9 @@ cd dashboard && npm run dev                 # Dashboard
 | Embeddable storefront chat widget (SSE streaming) | High | Done |
 | Incremental Shopify catalog sync + live stock in KB | High | Done |
 | ROI & impact dashboard | Medium | Done |
+| Subscription management (Recharge/Skio, human-approved operations) | High | Done |
+| Return labels (ShipEngine, policy eligibility + audit) | High | Done |
+| Multi-store registry + X-Store-Id data isolation + dashboard switcher | High | Done |
 | Circuit breakers for Shopify/Gorgias | Critical | Planned |
 | Conversation windowing (token budget) | Critical | Planned |
 | Dead-letter queue + Slack alerts | High | Planned |
@@ -805,7 +853,7 @@ cd dashboard && npm run dev                 # Dashboard
 | PostgreSQL migration path | Medium | Planned |
 | Multi-worker rate limiting (Redis) | Medium | Planned |
 | OpenTelemetry distributed tracing | Medium | Planned |
-| Multi-tenant management UI | Low | Researching |
+| Multi-tenant management UI | Low | In progress |
 
 ---
 

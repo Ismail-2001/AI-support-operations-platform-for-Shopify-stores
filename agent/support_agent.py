@@ -27,10 +27,12 @@ logger = structlog.get_logger(__name__)
 
 
 class CustomerSupportAgent:
-    def __init__(self):
+    def __init__(self, shopify: ShopifyClient | None = None):
         self.classifier = TicketClassifier()
         self.response_engine = ResponseGenerationEngine()
-        self.shopify = ShopifyClient()
+        # Per-store agents pass a ShopifyClient bound to their own shop domain
+        # and token; None keeps the deployment-wide default from settings.
+        self.shopify = shopify or ShopifyClient()
         self._graph = None
 
     @property

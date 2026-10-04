@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useConnection } from "./lib/useConnection";
 import { ThemeProvider } from "./lib/ThemeProvider";
-import { api } from "./lib/api";
+import { api, getSelectedStore, setSelectedStore } from "./lib/api";
 import { ConnectScreen } from "./components/ConnectScreen";
 import { Sidebar, type View } from "./components/Sidebar";
 import { ToastProvider } from "./components/Toast";
@@ -14,6 +14,8 @@ import { WidgetPage } from "./pages/WidgetPage";
 import { RoiPage } from "./pages/RoiPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SetupPage } from "./pages/SetupPage";
+import { StoresPage } from "./pages/StoresPage";
+import type { StoreRecord } from "./lib/types";
 
 type Health = { shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean; storage_persistent: boolean } | null;
 
@@ -23,10 +25,29 @@ export default function App() {
   const [openTicketId, setOpenTicketId] = useState<string | null>(null);
   const [health, setHealth] = useState<Health>(null);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [stores, setStores] = useState<StoreRecord[]>([]);
+  const [storesVersion, setStoresVersion] = useState(0);
+  // Active store -> X-Store-Id on every API call; also keys <main> so a switch
+  // remounts the current page and refetches inside the new store's context.
+  const [activeStore, setActiveStore] = useState<string | null>(() => getSelectedStore());
 
   useEffect(() => {
     if (connection) api.health(connection).then(setHealth).catch(() => setHealth(null));
   }, [connection]);
+
+  useEffect(() => {
+    if (!connection) return;
+    api
+      .listStores(connection)
+      .then((r) => setStores(r.stores))
+      .catch(() => setStores([]));
+  }, [connection, storesVersion]);
+
+  function activateStore(id: string | null) {
+    setSelectedStore(id);
+    setActiveStore(id);
+    setOpenTicketId(null);
+  }
 
   // First load of an unconfigured instance lands the user on the setup wizard.
   useEffect(() => {
@@ -71,8 +92,11 @@ export default function App() {
             onNavigate={navigateTo}
             onDisconnect={() => setConnection(null)}
             health={health}
+            stores={stores}
+            selectedStore={activeStore}
+            onSelectStore={activateStore}
           />
-          <main className="flex-1 px-8 py-7 overflow-x-hidden">
+          <main key={activeStore ?? "default"} className="flex-1 px-8 py-7 overflow-x-hidden">
             {view === "tickets" && !openTicketId && (
               <TicketsPage connection={connection} onOpenTicket={setOpenTicketId} />
             )}
@@ -84,6 +108,14 @@ export default function App() {
             {view === "knowledge-base" && <KnowledgeBasePage connection={connection} />}
             {view === "widget" && <WidgetPage connection={connection} />}
             {view === "setup" && <SetupPage connection={connection} onNavigate={navigateTo} />}
+            {view === "stores" && (
+              <StoresPage
+                connection={connection}
+                selectedStore={activeStore}
+                onActivateStore={activateStore}
+                onStoresChanged={() => setStoresVersion((v) => v + 1)}
+              />
+            )}
             {view === "settings" && <SettingsPage connection={connection} health={health} />}
           </main>
           <CommandPalette

@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi } from "vitest";
 import { Sidebar } from "../Sidebar";
 import { ThemeProvider } from "../../lib/ThemeProvider";
@@ -52,5 +53,29 @@ describe("Sidebar", () => {
   it("shows theme toggle", () => {
     renderSidebar();
     expect(screen.getByText(/mode$/)).toBeInTheDocument();
+  });
+
+  it("switches the active store through the callback", async () => {
+    const onSelectStore = vi.fn();
+    renderSidebar({
+      stores: [
+        {
+          id: "s1",
+          name: "Acme",
+          shop_domain: "acme.myshopify.com",
+          has_shopify_token: true,
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+      selectedStore: null,
+      onSelectStore,
+    });
+    const select = screen.getByLabelText("Active store");
+    expect(select).toBeInTheDocument();
+    await userEvent.selectOptions(select, "s1");
+    expect(onSelectStore).toHaveBeenCalledWith("s1");
+    await userEvent.selectOptions(select, "");
+    expect(onSelectStore).toHaveBeenCalledWith(null);
   });
 });

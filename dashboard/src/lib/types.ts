@@ -337,3 +337,12 @@ export interface WidgetSettings {
   key: string;
   config: WidgetConfig;
 }
+
+export interface StoreRecord {
+  id: string;
+  name: string;
+  shop_domain: string;
+  has_shopify_token: boolean;
+  created_at: string;
+  updated_at: string;
+}

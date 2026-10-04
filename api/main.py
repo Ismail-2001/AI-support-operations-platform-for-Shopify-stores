@@ -2,8 +2,10 @@
 Customer Support Agent - API entrypoint.
 AI-powered customer support automation for ecommerce, MCP-ready, Shopify + Gorgias connected.
 
-One deployed instance serves exactly one client. Do NOT route multiple clients through
-the same instance — the tenant name is a deployment-time label, not a row-level filter.
+One deployed instance serves exactly one client by default. For agency
+setups, requests carrying an ``X-Store-Id`` header are routed to that
+store's isolated data file and credentials (see agent/multistore.py);
+registry endpoints under /support/stores stay global.
 """
 
 import asyncio
@@ -22,7 +24,12 @@ from api.chat import chat_router
 from api.customer_support import public_router, webhook_router
 from api.customer_support import router as support_router
 from api.errors import APIError
-from api.middleware import RequestIDMiddleware, RequestLoggingMiddleware, WebhookBodyLimitMiddleware
+from api.middleware import (
+    RequestIDMiddleware,
+    RequestLoggingMiddleware,
+    StoreContextMiddleware,
+    WebhookBodyLimitMiddleware,
+)
 from api.setup import router as setup_router
 
 structlog.configure(
@@ -106,9 +113,11 @@ app = FastAPI(
 )
 
 # Middleware order matters: outermost runs first.
-# RequestIDMiddleware -> RequestLoggingMiddleware -> WebhookBodyLimitMiddleware -> CORSMiddleware
+# RequestIDMiddleware -> RequestLoggingMiddleware -> StoreContextMiddleware ->
+# WebhookBodyLimitMiddleware -> CORSMiddleware
 app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
+app.add_middleware(StoreContextMiddleware)
 app.add_middleware(WebhookBodyLimitMiddleware)
 
 # CORS: /chat (the storefront widget) must work from any storefront origin — it
@@ -125,6 +134,7 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "PUT"],
     allow_headers=[
         "X-API-Key",
+        "X-Store-Id",
         "Content-Type",
         "Idempotency-Key",
         "X-Webhook-Secret",

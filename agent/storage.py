@@ -16,6 +16,7 @@ import aiosqlite
 import structlog
 
 from agent.config import settings
+from agent.context_proxy import ContextProxy
 from agent.models import ResponseSuggestion, SupportTicket, TicketMessage
 
 logger = structlog.get_logger(__name__)
@@ -1169,4 +1170,10 @@ def _text_similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a.strip(), b.strip()).ratio()
 
 
-store = TicketStore()
+def _current_ticket_store() -> TicketStore | None:
+    from agent.multistore import ticket_store_for_current
+
+    return ticket_store_for_current()
+
+
+store = ContextProxy(TicketStore(), _current_ticket_store)

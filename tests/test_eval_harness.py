@@ -33,8 +33,11 @@ def _suggestion(
     )
 
 
-def _action(action_type):
-    return SimpleNamespace(type=SimpleNamespace(value=action_type))
+def _action(action_type, operation=None):
+    return SimpleNamespace(
+        type=SimpleNamespace(value=action_type),
+        subscription_operation=SimpleNamespace(value=operation) if operation else None,
+    )
 
 
 def test_correct_category_passes():
@@ -137,6 +140,50 @@ def test_expected_action_type_none_fails_when_model_suggests_action():
 def test_expected_action_type_as_list_accepts_any_match():
     case = {"id": "a4", "expected_action_type": ["refund", "resend_order"]}
     result = score_case(case, _classification(), _suggestion(suggested_action=_action("refund")))
+    assert result.passed
+
+
+def test_expected_action_operation_passes_when_matched():
+    """pause expected, model proposed pause - the two fields (type vs operation)
+    must be scored independently."""
+    case = {"id": "o1", "expected_action_operation": "pause"}
+    result = score_case(
+        case,
+        _classification(),
+        _suggestion(suggested_action=_action("subscription_action", operation="pause")),
+    )
+    assert result.passed
+
+
+def test_expected_action_operation_fails_when_model_proposes_the_wrong_one():
+    """Skip asked, pause proposed - a wrong subscription operation is exactly the
+    kind of near-miss that looks fine in a demo but changes customer data."""
+    case = {"id": "o2", "expected_action_operation": "skip"}
+    result = score_case(
+        case,
+        _classification(),
+        _suggestion(suggested_action=_action("subscription_action", operation="pause")),
+    )
+    assert not result.passed
+    assert any("subscription_operation" in f for f in result.failures)
+
+
+def test_expected_action_operation_fails_when_model_proposes_nothing():
+    case = {"id": "o3", "expected_action_operation": "cancel"}
+    result = score_case(
+        case, _classification(), _suggestion(suggested_action=_action("subscription_action"))
+    )
+    assert not result.passed
+    assert any("subscription_operation" in f for f in result.failures)
+
+
+def test_expected_action_operation_as_list_accepts_any_match():
+    case = {"id": "o4", "expected_action_operation": ["pause", "skip"]}
+    result = score_case(
+        case,
+        _classification(),
+        _suggestion(suggested_action=_action("subscription_action", operation="skip")),
+    )
     assert result.passed
 
 

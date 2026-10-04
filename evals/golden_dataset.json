@@ -181,5 +181,55 @@
     "response_checks": {
       "must_not_contain": ["order has been cancelled", "order was cancelled", "I cancelled the order"]
     }
+  },
+  {
+    "id": "subscription_pause_request",
+    "description": "Pause request with subscription data present - must propose a subscription_action with operation=pause for human approval, never claim it's done (subscription category always forces human review)",
+    "history": ["I'm traveling for work all next month - can you pause my subscription for October?"],
+    "expected_category": "subscription",
+    "subscription_context": "Subscriptions for this customer:\n- id=sub_1042 provider=recharge status=active title=Monthly Coffee Club qty=1 price=24.00 next_charge=2026-10-15 frequency=every 1 month ship_to=123 Main St, Portland, OR, 97201",
+    "expected_action_type": "subscription_action",
+    "expected_action_operation": "pause",
+    "requires_human_review_expected": true,
+    "response_checks": {
+      "must_not_contain": ["has been paused", "I paused", "pause is complete", "subscription is paused"]
+    }
+  },
+  {
+    "id": "subscription_skip_next_charge",
+    "description": "Skip next delivery with subscription data present - must propose operation=skip (not pause, not cancel)",
+    "history": ["Please skip my next delivery - I still have plenty of coffee left from last month."],
+    "expected_category": "subscription",
+    "subscription_context": "Subscriptions for this customer:\n- id=sub_1042 provider=recharge status=active title=Monthly Coffee Club qty=1 price=24.00 next_charge=2026-10-15 frequency=every 1 month ship_to=123 Main St, Portland, OR, 97201",
+    "expected_action_type": "subscription_action",
+    "expected_action_operation": "skip",
+    "requires_human_review_expected": true,
+    "response_checks": {
+      "must_not_contain": ["we have skipped", "skipped your next", "your next delivery is skipped"]
+    }
+  },
+  {
+    "id": "subscription_payment_method_portal_only",
+    "description": "Card update request must NOT become a subscription action (no card data in chat) - point to the portal instead",
+    "history": ["My card expired. How do I update the payment method on my subscription?"],
+    "expected_category": "subscription",
+    "subscription_context": "Subscriptions for this customer:\n- id=sub_1042 provider=recharge status=active title=Monthly Coffee Club qty=1 price=24.00 next_charge=2026-10-15 frequency=every 1 month ship_to=123 Main St, Portland, OR, 97201",
+    "expected_action_type": "none",
+    "requires_human_review_expected": true,
+    "response_checks": {
+      "must_contain_one_of": ["portal", "billing", "payment method"],
+      "must_not_contain": ["your card has been updated", "payment method updated", "card updated"]
+    }
+  },
+  {
+    "id": "subscription_unavailable_stays_honest",
+    "description": "Skip request when subscription data is unavailable - must not propose an action (no subscription_id to act on) and never claim anything was skipped",
+    "history": ["Can you skip the September shipment of my protein powder subscription?"],
+    "expected_category": "subscription",
+    "expected_action_type": "none",
+    "requires_human_review_expected": true,
+    "response_checks": {
+      "must_not_contain": ["we have skipped", "I skipped", "skipped your shipment", "shipment skipped"]
+    }
   }
 ]

@@ -10,6 +10,22 @@ from agent.observability import _compute_cost, _extract_usage, check_daily_cost_
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _restore_store_singletons():
+    """These tests swap agent.storage.store (and agent.support_agent.store) for
+    their own DB and never put them back - a leaked raw TicketStore breaks
+    context-aware routing (X-Store-Id) for every later test in the session."""
+
+    import agent.storage as storage_module
+    import agent.support_agent as sa
+
+    orig_storage = storage_module.store
+    orig_sa = sa.store
+    yield
+    storage_module.store = orig_storage
+    sa.store = orig_sa
+
+
 class _FakeUsageMessage:
     def __init__(self, input_tokens, output_tokens):
         self.usage_metadata = {"input_tokens": input_tokens, "output_tokens": output_tokens}

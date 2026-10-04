@@ -14,6 +14,7 @@ import numpy as np
 import structlog
 
 from agent.config import settings
+from agent.context_proxy import ContextProxy
 from agent.llm import embed_text
 from agent.models import KnowledgeChunk
 
@@ -205,4 +206,10 @@ class KnowledgeBase:
             return row[0] if row else 0
 
 
-knowledge_base = KnowledgeBase()
+def _current_knowledge_base() -> KnowledgeBase | None:
+    from agent.multistore import knowledge_base_for_current
+
+    return knowledge_base_for_current()
+
+
+knowledge_base = ContextProxy(KnowledgeBase(), _current_knowledge_base)

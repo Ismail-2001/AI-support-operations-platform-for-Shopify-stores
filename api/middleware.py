@@ -66,6 +66,42 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         return response
 
 
+class StoreContextMiddleware(BaseHTTPMiddleware):
+    """Binds an X-Store-Id header to the current request context.
+
+    Validates the store against the registry (404 STORE_NOT_FOUND otherwise),
+    eagerly initializes that store's data-plane objects (TicketStore /
+    KnowledgeBase / agent), then sets the ``current_store_id`` ContextVar that
+    the module-level ContextProxy singletons resolve through. The var is
+    reset when the request finishes; no header means no context, so
+    single-store deploys behave exactly as before.
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        store_id = request.headers.get("x-store-id")
+        if not store_id:
+            return await call_next(request)
+
+        from agent.multistore import StoreNotFound, current_store_id, ensure_store_ready
+
+        try:
+            await ensure_store_ready(store_id)
+        except StoreNotFound:
+            return JSONResponse(
+                status_code=404,
+                content={
+                    "error": "STORE_NOT_FOUND",
+                    "message": f"Unknown store: {store_id}",
+                },
+            )
+
+        token = current_store_id.set(store_id)
+        try:
+            return await call_next(request)
+        finally:
+            current_store_id.reset(token)
+
+
 class WebhookBodyLimitMiddleware(BaseHTTPMiddleware):
     """Enforces webhook request body size via the Content-Length header.
 

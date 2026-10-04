@@ -1,5 +1,6 @@
-import { Inbox, BarChart3, BookOpen, Radio, LogOut, Sun, Moon, Settings, Wand2, MessageSquare, TrendingUp } from "lucide-react";
+import { Inbox, BarChart3, BookOpen, Radio, LogOut, Sun, Moon, Settings, Wand2, MessageSquare, TrendingUp, Store } from "lucide-react";
 import { useTheme } from "../lib/ThemeProvider";
+import type { StoreRecord } from "../lib/types";
 
 export type View =
   | "tickets"
@@ -8,15 +9,19 @@ export type View =
   | "widget"
   | "roi"
   | "settings"
-  | "setup";
+  | "setup"
+  | "stores";
 
 export function Sidebar({
-  view, onNavigate, onDisconnect, health,
+  view, onNavigate, onDisconnect, health, stores, selectedStore, onSelectStore,
 }: {
   view: View;
   onNavigate: (v: View) => void;
   onDisconnect: () => void;
   health: { shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean } | null;
+  stores?: StoreRecord[];
+  selectedStore?: string | null;
+  onSelectStore?: (id: string | null) => void;
 }) {
   const { theme, toggle } = useTheme();
   const isDark = theme === "dark";
@@ -28,6 +33,7 @@ export function Sidebar({
     { id: "knowledge-base", label: "Knowledge base", icon: BookOpen },
     { id: "widget", label: "Chat widget", icon: MessageSquare },
     { id: "setup", label: "Setup", icon: Wand2 },
+    { id: "stores", label: "Stores", icon: Store },
     { id: "settings", label: "Settings", icon: Settings },
   ];
 
@@ -38,6 +44,23 @@ export function Sidebar({
       <div className={`flex items-center gap-2.5 px-5 h-16 border-b ${isDark ? "border-white/8" : "border-white/10"}`}>
         <Radio className="w-4.5 h-4.5 text-teal" strokeWidth={2.25} />
         <span className="font-mono text-[11px] tracking-[0.18em] uppercase text-white/60">Support Console</span>
+      </div>
+
+      <div className={`px-4 py-3 border-b space-y-2.5 ${isDark ? "border-white/8" : "border-white/10"}`}>
+        <div className="text-[10px] uppercase tracking-[0.14em] text-white/40">Active store</div>
+        <select
+          aria-label="Active store"
+          value={selectedStore ?? ""}
+          onChange={(e) => onSelectStore?.(e.target.value || null)}
+          className="w-full bg-white/8 border border-white/10 rounded-lg px-2 py-1.5 text-xs text-white/90 outline-none focus:border-teal"
+        >
+          <option value="" className="text-black">Default store</option>
+          {(stores ?? []).map((s) => (
+            <option key={s.id} value={s.id} className="text-black">
+              {s.name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <nav className="flex-1 px-3 py-5 space-y-1">

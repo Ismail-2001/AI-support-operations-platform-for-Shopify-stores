@@ -87,6 +87,26 @@ def score_case(case: dict[str, Any], classification: Any, suggestion: Any) -> Ca
                 f"suggested_action.type: expected one of {allowed}, got '{actual_action}'"
             )
 
+    # Which subscription operation the model proposed (pause/skip/cancel/...).
+    # Separate from the action TYPE so "proposed an action" and "proposed the
+    # RIGHT action" are scored independently.
+    expected_operation = case.get("expected_action_operation")
+    if expected_operation is not None:
+        suggested_action = getattr(suggestion, "suggested_action", None)
+        actual_operation = (
+            _val(suggested_action, "subscription_operation")
+            if suggested_action is not None
+            else None
+        )
+        allowed = (
+            expected_operation if isinstance(expected_operation, list) else [expected_operation]
+        )
+        if actual_operation not in allowed:
+            failures.append(
+                "suggested_action.subscription_operation: "
+                f"expected one of {allowed}, got '{actual_operation}'"
+            )
+
     response_text = (getattr(suggestion, "suggested_response", "") or "").lower()
     checks = case.get("response_checks", {})
     for forbidden in checks.get("must_not_contain", []):

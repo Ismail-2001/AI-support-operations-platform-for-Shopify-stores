@@ -8,6 +8,19 @@ from evals.compare import compare, print_diff
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+def _restore_store_singletons():
+    """These tests swap agent.storage.store for their own DB and never put it
+    back - a leaked raw TicketStore breaks context-aware routing (X-Store-Id)
+    for every later test in the session."""
+
+    import agent.storage as storage_module
+
+    orig_storage = storage_module.store
+    yield
+    storage_module.store = orig_storage
+
+
 # ── compare.py diffs ────────────────────────────────────────
 
 

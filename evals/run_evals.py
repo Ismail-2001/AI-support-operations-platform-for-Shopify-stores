@@ -70,10 +70,16 @@ async def run_case(
         classification,
         order_context=None,
         knowledge_context=knowledge_context,
+        # Optional per-case fixture: lets subscription cases exercise the real
+        # prompt path with subscription data present (or absent, by omitting it).
+        subscription_context=case.get("subscription_context"),
         history=history,
     )
 
     result = score_case(case, classification, suggestion)
+    action = suggestion.suggested_action
+    action_type = getattr(action, "type", None) if action else None
+    operation = getattr(action, "subscription_operation", None) if action else None
     return {
         "case_id": case["id"],
         "description": case.get("description", ""),
@@ -85,6 +91,8 @@ async def run_case(
         "actual_sentiment": classification.sentiment.value,
         "confidence": suggestion.confidence,
         "requires_human_review": suggestion.requires_human_review,
+        "action_type": action_type.value if hasattr(action_type, "value") else action_type,
+        "subscription_operation": operation.value if hasattr(operation, "value") else operation,
         "response_preview": suggestion.suggested_response[:200],
     }
 

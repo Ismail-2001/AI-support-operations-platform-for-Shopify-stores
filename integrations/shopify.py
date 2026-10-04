@@ -71,6 +71,7 @@ class ShopifyClient:
         # the process default keeps coming from settings (see agent/storage.py stores).
         domain = shop_domain or settings.SHOPIFY_SHOP_DOMAIN
         token = access_token or settings.SHOPIFY_ACCESS_TOKEN
+        self.shop_domain = domain
         self.enabled = bool(domain and token)
         if self.enabled:
             self.base_url = f"https://{domain}/admin/api/{settings.SHOPIFY_API_VERSION}"

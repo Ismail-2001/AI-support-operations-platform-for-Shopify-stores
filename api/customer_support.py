@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from agent.auth import check_shared_secret, verify_api_key
 from agent.config import settings
+from agent.context_proxy import ContextProxy
 from agent.knowledge_base import knowledge_base
 from agent.models import (
     MessageSender,
@@ -65,7 +66,16 @@ webhook_router = APIRouter(
 # Fully public: uptime monitors need this to work with no credentials at all.
 public_router = APIRouter(prefix="/support", tags=["public"])
 
-_agent = CustomerSupportAgent()
+
+def _current_support_agent() -> CustomerSupportAgent | None:
+    from agent.multistore import agent_for_current
+
+    return agent_for_current()
+
+
+# Requests carrying X-Store-Id resolve to that store's agent (own Shopify
+# credentials); every other context uses this deployment-wide default.
+_agent = ContextProxy(CustomerSupportAgent(), _current_support_agent)
 _gorgias = GorgiasClient()
 
 
@@ -1842,3 +1852,113 @@ async def customer_support_health():
         "storage_persistent": not storage_is_ephemeral(),
         "timestamp": datetime.now(UTC).isoformat(),
     }
+
+
+# --- Multi-store registry (agency packaging) ---
+# Registry reads/writes always hit the primary DB and ignore any X-Store-Id
+# context on the request — they are global admin operations.
+
+
+class StoreCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    shop_domain: str = ""
+    shopify_access_token: str | None = None
+
+    @field_validator("shop_domain")
+    @classmethod
+    def _normalize_domain(cls, v: str) -> str:
+        return (v or "").strip().lower()
+
+
+class StoreUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    shop_domain: str | None = None
+    shopify_access_token: str | None = None
+
+    @field_validator("shop_domain")
+    @classmethod
+    def _normalize_domain(cls, v: str | None) -> str | None:
+        return v.strip().lower() if v is not None else None
+
+
+async def _find_duplicate_shop_domain(shop_domain: str, exclude_id: str | None = None) -> bool:
+    if not shop_domain:
+        return False
+    from agent.multistore import list_stores
+
+    for rec in await list_stores():
+        if rec["shop_domain"] == shop_domain and rec["id"] != exclude_id:
+            return True
+    return False
+
+
+@router.get("/stores")
+async def list_stores_endpoint():
+    """All stores in the registry (credentials redacted)."""
+    from agent.multistore import list_stores, public_store
+
+    return {"stores": [public_store(r) for r in await list_stores()]}
+
+
+@router.post("/stores", status_code=201)
+async def create_store_endpoint(req: StoreCreateRequest):
+    from agent.multistore import create_store, public_store
+
+    if await _find_duplicate_shop_domain(req.shop_domain):
+        raise APIError(
+            code="STORE_ALREADY_EXISTS",
+            message=f"A store with shop domain {req.shop_domain} already exists.",
+            status=409,
+        )
+    credentials = {}
+    if req.shopify_access_token:
+        credentials["shopify_access_token"] = req.shopify_access_token
+    rec = await create_store(req.name, shop_domain=req.shop_domain, credentials=credentials)
+    return {"store": public_store(rec)}
+
+
+@router.get("/stores/{store_id}")
+async def get_store_endpoint(store_id: str):
+    from agent.multistore import get_store, public_store
+
+    rec = await get_store(store_id)
+    if rec is None:
+        raise_not_found("store", store_id)
+    return {"store": public_store(rec)}
+
+
+@router.patch("/stores/{store_id}")
+async def update_store_endpoint(store_id: str, req: StoreUpdateRequest):
+    from agent.multistore import public_store, update_store
+
+    if req.shop_domain and await _find_duplicate_shop_domain(req.shop_domain, exclude_id=store_id):
+        raise APIError(
+            code="STORE_ALREADY_EXISTS",
+            message=f"A store with shop domain {req.shop_domain} already exists.",
+            status=409,
+        )
+    credentials = {}
+    if req.shopify_access_token is not None:
+        # None value on a credential key means "remove"; empty string clears it.
+        credentials["shopify_access_token"] = req.shopify_access_token or None
+    rec = await update_store(
+        store_id,
+        name=req.name,
+        shop_domain=req.shop_domain,
+        credentials=credentials or None,
+    )
+    if rec is None:
+        raise_not_found("store", store_id)
+    return {"store": public_store(rec)}
+
+
+@router.delete("/stores/{store_id}")
+async def delete_store_endpoint(store_id: str):
+    """Removes the store from the registry and its caches. The per-store data
+    file stays on disk — no silent data destruction; re-adding the store
+    re-attaches to the same file."""
+    from agent.multistore import delete_store
+
+    if not await delete_store(store_id):
+        raise_not_found("store", store_id)
+    return {"deleted": True, "store_id": store_id}

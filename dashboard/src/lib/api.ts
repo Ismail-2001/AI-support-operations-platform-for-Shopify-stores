@@ -2,7 +2,7 @@ import type {
   AutoSendReport, BrandVoice, CalibrationReport, CostReport, KbSyncStatus, KnowledgeBaseStatus,
   LiveStockVariant, NormalizedSubscription, QualityStats, ReturnEligibility, ReturnLabelResult,
   RoiAssumptions, RoiReport, SetupShopifyResult, SetupStatus,
-  SetupTestResult, SupportAnalytics, ThresholdSetting, TicketMessage, TicketOrder,
+  SetupTestResult, StoreRecord, SupportAnalytics, ThresholdSetting, TicketMessage, TicketOrder,
   TicketSubscriptions, TicketWithSuggestion, TraceEntry, WidgetConfig, WidgetSettings,
 } from "./types";
 
@@ -19,12 +19,39 @@ export interface Connection {
   apiKey: string;
 }
 
+// Active store for the X-Store-Id header. Persisted so a refresh keeps the
+// operator on the same store; the backend ignores it on registry endpoints.
+const STORE_KEY = "cs_selected_store";
+
+let selectedStoreId: string | null = (() => {
+  try {
+    return window.localStorage.getItem(STORE_KEY);
+  } catch {
+    return null;
+  }
+})();
+
+export function getSelectedStore(): string | null {
+  return selectedStoreId;
+}
+
+export function setSelectedStore(id: string | null): void {
+  selectedStoreId = id;
+  try {
+    if (id) window.localStorage.setItem(STORE_KEY, id);
+    else window.localStorage.removeItem(STORE_KEY);
+  } catch {
+    /* storage unavailable (private mode) - header still works this session */
+  }
+}
+
 async function request<T>(conn: Connection, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${conn.baseUrl.replace(/\/$/, "")}${path}`, {
     ...init,
     headers: {
       "Content-Type": "application/json",
       "X-API-Key": conn.apiKey,
+      ...(selectedStoreId ? { "X-Store-Id": selectedStoreId } : {}),
       ...(init?.headers || {}),
     },
   });
@@ -248,5 +275,31 @@ export const api = {
     request<SetupTestResult>(conn, "/support/setup/test", {
       method: "POST",
       body: JSON.stringify({ question }),
+    }),
+
+  listStores: (conn: Connection) => request<{ stores: StoreRecord[] }>(conn, "/support/stores"),
+
+  createStore: (
+    conn: Connection,
+    input: { name: string; shop_domain?: string; shopify_access_token?: string },
+  ) =>
+    request<{ store: StoreRecord }>(conn, "/support/stores", {
+      method: "POST",
+      body: JSON.stringify(input),
+    }),
+
+  updateStore: (
+    conn: Connection,
+    id: string,
+    input: { name?: string; shop_domain?: string; shopify_access_token?: string },
+  ) =>
+    request<{ store: StoreRecord }>(conn, `/support/stores/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    }),
+
+  deleteStore: (conn: Connection, id: string) =>
+    request<{ deleted: boolean; store_id: string }>(conn, `/support/stores/${id}`, {
+      method: "DELETE",
     }),
 };
