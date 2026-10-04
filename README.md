@@ -11,20 +11,21 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-183%20Python%20%7C%2067%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
+[![Tests](https://img.shields.io/badge/Tests-183%20Python%20%7C%2069%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
 ---
 
-[Key Features](#-key-features) •
-[Architecture](#-architecture) •
-[Quick Start](#-quick-start) •
-[API Reference](#-api-reference) •
-[Security](#-security) •
-[Deployment](#-deployment) •
-[Testing](#-testing--evaluation) •
-[Contributing](#-contributing)
+[Key Features](#key-features) •
+[Architecture](#architecture) •
+[Quick Start](#quick-start) •
+[API Reference](#api-reference) •
+[Safety Proof](sales/SAFETY_PROOF.md) •
+[Security](#security-model) •
+[Deployment](#deployment) •
+[Testing](#testing--evaluation) •
+[Contributing](#contributing)
 
 </div>
 
@@ -84,6 +85,8 @@ One-click sync: `POST /support/knowledge-base/sync-shopify`
 - **PII redaction** — emails and phone numbers masked before LLM calls
 - **Webhook body size limit** — 1 MB cap prevents memory exhaustion
 
+> 🛡️ **Proven, not promised:** [sales/SAFETY_PROOF.md](sales/SAFETY_PROOF.md) walks through four real cases from the eval harness — prompt injection forcing a $500 refund, a knowledge-base gap, an angry customer, and an order-status lookup — with the agent's actual outputs. Full 15/15 eval report available on request.
+
 ### Self-Improvement Analytics
 
 Every human-sent reply is diffed against the AI's draft. `/support/analytics/quality` shows edit rate by category — that's your signal for which categories need better prompts or more KB content.
@@ -101,6 +104,14 @@ React + TypeScript + Tailwind dashboard for reviewing tickets, tracking analytic
 ### 10-Minute Onboarding Wizard
 
 A guided four-step setup turns a raw store into a working agent: **connect Shopify → import policies & products into the knowledge base → set brand voice (tone, sign-off, support email) → send a live test ticket and review the draft.**
+
+Built for non-technical founders:
+
+- Each step is a **numbered plain-English checklist** with a screenshot slot (drop images into `dashboard/public/screenshots/` and they render automatically).
+- **"I need help creating the Shopify app"** — an inline panel covering the three classic stuck-points (custom-app button greyed out, which API scopes, where the one-time token hides), with a slot for a 2-minute Loom walkthrough.
+- Every brand-voice field has helper text and a **live sign-off preview** before you save.
+- After the test draft: **"This is only a preview. Nothing was sent to any customer."**
+- Finish on a **"You're ready"** screen that confirms review mode is active, summarizes what's connected, and gives the three next steps.
 
 The result card shows grounding evidence — which parts came from real Shopify order data vs. the knowledge base — plus a confidence score, before anything ships. Auto-send stays in review mode until you explicitly turn it on.
 
@@ -270,7 +281,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 183 Python + 67 frontend tests |
+| **Testing** | Pytest + Vitest | 183 Python + 69 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -281,17 +292,17 @@ sequenceDiagram
 ### Prerequisites
 
 - Python 3.12+
-- Node.js 18+ (for dashboard)
+- Node.js 20+ (for dashboard)
 - An [OpenRouter API key](https://openrouter.ai/keys) (eval-validated primary provider)
 - A [Google API key](https://aistudio.google.com/apikey) (required for Knowledge Base / RAG)
-- A [Shopify store](https://shopify.com) with a custom app that has `read_orders` scope
-- A [Gorgias account](https://gorgias.com) with REST API key
+- A [Shopify store](https://shopify.com) with a custom app that has `read_orders` + `read_products` scopes
+- A [Gorgias account](https://gorgias.com) with REST API key *(optional — the agent runs without it via API + dashboard)*
 
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/Ismail-2001/customer-support-ai-employee.git
-cd customer-support-ai-employee
+git clone https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores.git
+cd AI-support-operations-platform-for-Shopify-stores
 cp .env.example .env
 ```
 
@@ -375,13 +386,15 @@ Dashboard: **http://localhost:5173**
 | `GROQ_MODEL` | No | Default: `llama-3.3-70b-versatile` |
 | `GOOGLE_API_KEY` | Yes | Chat fallback (Gemini) **and required for Knowledge Base / RAG** — embeddings use `gemini-embedding-001` regardless of chat provider |
 | `SHOPIFY_SHOP_DOMAIN` | Yes | Your Shopify store domain |
-| `SHOPIFY_ACCESS_TOKEN` | Yes | Admin API token (read_orders scope) |
-| `GORGIAS_DOMAIN` | Yes | Gorgias subdomain |
-| `GORGIAS_EMAIL` | Yes | Gorgias login email |
-| `GORGIAS_API_KEY` | Yes | Gorgias REST API key |
+| `SHOPIFY_ACCESS_TOKEN` | Yes | Admin API token (`read_orders` + `read_products` scopes) |
+| `GORGIAS_DOMAIN` | Optional† | Gorgias subdomain |
+| `GORGIAS_EMAIL` | Optional† | Gorgias login email |
+| `GORGIAS_API_KEY` | Optional† | Gorgias REST API key |
 | `API_KEY` | Yes | Auth key for all `/support/*` endpoints |
 
 *At least one chat provider key is required (`OPENROUTER_API_KEY` > `GROQ_API_KEY` > `GOOGLE_API_KEY` — first match wins). `GOOGLE_API_KEY` is additionally required for the Knowledge Base.*
+
+† *Gorgias credentials are only needed for the Gorgias webhook/reply loop. Without them the agent still works end-to-end through the REST API and dashboard (tickets in, drafts out).*
 
 ### Safety Gates
 
@@ -531,7 +544,7 @@ npm run test:watch    # Watch mode
 npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-67 tests across 9 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, and the Setup wizard.
+69 tests across 9 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, and the Setup wizard (including the full finish → "You're ready" flow).
 
 ### Eval Harness
 
@@ -613,14 +626,14 @@ cs-agent/
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
-├── tests/                      # 180 unit/integration tests
+├── tests/                      # 183 unit/integration tests
 │   ├── conftest.py             # Fixtures: temp DB, FakeClassifier, FakeShopify
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests
 │   ├── test_storage.py         # Analytics + migration tests
 │   └── ...                     # 15 test files covering every module
 │
-├── sales/                      # Sales collateral (Loom script, founding offer sheet)
+├── sales/                      # Sales collateral (Loom script, founding offer, safety proof)
 │
 ├── mcp_server/                 # MCP protocol server (Claude Desktop, etc.)
 │   └── server.py               # Read-only tools over the ticket store
@@ -639,7 +652,8 @@ cs-agent/
 ├── .env.example                # Documented environment template
 ├── .env.dev.example            # Dev environment template
 ├── .env.prod.example           # Production environment template
-└── requirements.txt            # Python dependencies
+├── requirements.txt            # Direct Python dependencies (pinned)
+└── requirements.lock           # Exact transitive pins — CI audits this with pip-audit
 ```
 
 ---
@@ -729,6 +743,9 @@ cd dashboard && npm run dev                 # Dashboard
 | Frontend test infrastructure | High | Done |
 | Client setup wizard (Shopify → policies → voice → test) | High | Done |
 | Frontend tests in CI | High | Done |
+| Dependency audit gates (pip-audit + npm audit in CI) | High | Done |
+| Production storage detection + disk config docs | High | Done |
+| Guided wizard UX pass (checklists, help panel, ready screen) | Medium | Done |
 | Circuit breakers for Shopify/Gorgias | Critical | Planned |
 | Conversation windowing (token budget) | Critical | Planned |
 | Dead-letter queue + Slack alerts | High | Planned |
@@ -751,11 +768,12 @@ Contributions, issues, and feature requests are welcome.
 2. **Create a feature branch**: `git checkout -b feature/amazing-feature`
 3. **Write tests** for your changes
 4. **Run the test suite**: `pytest tests/ -v`
-5. **Run linter**: `ruff check .`
-6. **Run evals**: `python -m evals.run_evals`
-7. **Commit**: `git commit -m 'feat: add amazing feature'`
-8. **Push**: `git push origin feature/amazing-feature`
-9. **Open a Pull Request**
+5. **Run linter**: `ruff check .` (and `ruff format --check .`)
+6. **Run security audit**: `pip-audit -r requirements.lock`
+7. **Run evals**: `python -m evals.run_evals`
+8. **Commit**: `git commit -m 'feat: add amazing feature'`
+9. **Push**: `git push origin feature/amazing-feature`
+10. **Open a Pull Request**
 
 ### Commit Convention
 
@@ -784,7 +802,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 [![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/Ismail-2001)
 
 For inquiries about deployment, customization, or enterprise licensing:
-- Open a [GitHub Issue](https://github.com/Ismail-2001/customer-support-ai-employee/issues)
+- Open a [GitHub Issue](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/issues)
 - Connect via [GitHub Profile](https://github.com/Ismail-2001)
 
 ---
