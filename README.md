@@ -11,7 +11,7 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-228%20Python%20%7C%2080%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
+[![Tests](https://img.shields.io/badge/Tests-284%20Python%20%7C%2099%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -74,7 +74,7 @@ Category-aware: only fetches orders when the ticket is order-related (saves API 
 
 Zero-infrastructure vector search over your Shopify policies + product catalog + custom FAQ. All embeddings stored locally in SQLite — no Pinecone, no Weaviate, no extra cost.
 
-One-click sync: `POST /support/knowledge-base/sync-shopify`
+One-click sync: `POST /support/knowledge-base/sync-shopify` — **incremental**: content hashes skip unchanged products (no re-embedding a 500-item catalog), and live stock levels are queryable per product.
 
 ### Safety-First Design
 
@@ -100,6 +100,14 @@ Every LLM call is logged with exact input (transcript + context), output, latenc
 ### Operator Dashboard
 
 React + TypeScript + Tailwind dashboard for reviewing tickets, tracking analytics, managing the knowledge base, and monitoring cost spend. Dark mode, command palette (`Ctrl+K`), CSV export, customer info panels.
+
+### Storefront Chat Widget
+
+A drop-in `<script src="https://<api>/chat/widget.js" data-key="...">` opens live chat on your storefront. Shadow DOM keeps it isolated from your theme; SSE streaming shows the agent's stages live ("Looking up your order…"); sessions resume for returning visitors. Authenticated by a publishable widget key (rotate anytime), rate-limited per IP, and a one-click **"Talk to a human"** flags the ticket for your team in the dashboard.
+
+### ROI & Impact Dashboard
+
+Every auto-sent reply and reviewed draft is costed against real LLM spend. The ROI page converts hours saved into dollars using your own assumptions (minutes per task, hourly rate) and shows net savings, cost per ticket, and edit rates over any window — the number you show your client when it's time to renew.
 
 ### 10-Minute Onboarding Wizard
 
@@ -281,7 +289,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 228 Python + 80 frontend tests |
+| **Testing** | Pytest + Vitest | 284 Python + 99 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -301,8 +309,8 @@ sequenceDiagram
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores.git
-cd AI-support-operations-platform-for-Shopify-stores
+git clone https://github.com/Ismail-2001/customer-support-ai-employee.git
+cd customer-support-ai-employee
 cp .env.example .env
 ```
 
@@ -467,8 +475,31 @@ Dashboard: **http://localhost:5173**
 |---|---|---|
 | `POST` | `/support/knowledge-base` | Add/replace a KB document |
 | `POST` | `/support/knowledge-base/sync-shopify` | Auto-ingest Shopify policies + products |
+| `GET` | `/support/knowledge-base/sync-status` | Background catalog-sync progress (counts, errors) |
+| `GET` | `/support/knowledge-base/live-stock?handle=` | Live Shopify stock per variant for a product |
 | `GET` | `/support/knowledge-base` | KB chunk count |
 | `POST` | `/support/knowledge-base/search` | Debug KB retrieval for a query |
+
+### Storefront Chat Widget (public)
+
+Authenticated by the publishable widget key (`X-Widget-Key`), not the private API key.
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/chat/widget.js` | Serve the embeddable bundle (drop-in `<script>` tag) |
+| `GET` | `/chat/config?key=` | Widget appearance + enabled flag (401 on a bad key) |
+| `POST` | `/chat/sessions` | Create a session (or resume with an existing id) |
+| `GET` | `/chat/sessions/{id}` | Session state + conversation history |
+| `POST` | `/chat/sessions/{id}/messages` | Send a message — SSE stream of stage/message/error events |
+| `POST` | `/chat/sessions/{id}/handoff` | Flag the linked ticket: customer wants a human |
+
+Widget settings (API Key):
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/support/widget` | Current widget config + publishable key |
+| `PUT` | `/support/widget` | Update title/greeting/color/enabled |
+| `POST` | `/support/widget/key` | Rotate the publishable key |
 
 ### Analytics & Observability
 
@@ -481,6 +512,8 @@ Dashboard: **http://localhost:5173**
 | `GET` | `/support/automation/thresholds` | Effective per-category thresholds (env + runtime overrides) |
 | `PUT` | `/support/automation/thresholds` | Set/clear a per-category runtime override (no redeploy; null clears) |
 | `GET` | `/support/analytics/costs` | Real LLM spend by day and stage |
+| `GET` | `/support/analytics/roi?days=7` | ROI report: hours saved, labor $, LLM cost, net savings |
+| `PUT` | `/support/analytics/roi/settings` | Update time/cost assumptions (minutes per task, hourly rate) |
 | `GET` | `/support/tickets/{id}/trace` | Full pipeline trace ("why did it say that?") |
 | `GET` | `/support/health` | Shopify/Gorgias connection status |
 
@@ -552,7 +585,7 @@ npm run test:watch    # Watch mode
 npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-80 tests across 11 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), and the two action-approval panels (cancel, edit address, partial refund with line-item scoping).
+99 tests across 12 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar, ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), and the two action-approval panels (cancel, edit address, partial refund with line-item scoping), and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
 
 ### Eval Harness
 
@@ -606,6 +639,10 @@ cs-agent/
 │   ├── auth.py                 # API key + webhook secret verification
 │   ├── rate_limit.py           # In-memory sliding window rate limiter
 │   ├── knowledge_base.py       # Local RAG: chunk, embed, cosine search
+│   ├── product_knowledge.py    # Shopify product → KB document builder
+│   ├── product_sync.py         # Incremental catalog sync (content-hashed)
+│   ├── roi.py                  # ROI report math (hours/labor vs LLM cost)
+│   ├── widget_store.py         # Publishable widget key + widget config
 │   ├── conversation.py         # Transcript formatter for LLM context
 │   ├── observability.py        # Tracing + cost recording per LLM call
 │   ├── cost_tracker.py         # Model pricing table
@@ -614,6 +651,7 @@ cs-agent/
 ├── api/                        # FastAPI application
 │   ├── main.py                 # Entrypoint, middleware, CORS, exception handlers
 │   ├── customer_support.py     # All routes (tickets, actions, KB, analytics)
+│   ├── chat.py                 # Public storefront chat: sessions + SSE streams
 │   ├── setup.py                # Onboarding wizard (Shopify, policies, voice, test)
 │   ├── errors.py               # Structured APIError class + error codes
 │   └── middleware.py           # RequestID, logging, webhook body limit
@@ -625,7 +663,8 @@ cs-agent/
 ├── dashboard/                  # React + TypeScript operator dashboard
 │   └── src/
 │       ├── components/         # Sidebar, Badges, ConfidenceBar, Toast, etc.
-│       ├── pages/              # Tickets, TicketDetail, Analytics, Settings
+│       ├── pages/              # Tickets, Analytics, ROI, Knowledge base, Widget, Setup
+│       ├── widget/             # Embeddable storefront widget (esbuild bundle)
 │       └── lib/                # API client, ThemeProvider, types
 │
 ├── evals/                      # Golden-dataset evaluation framework
@@ -634,12 +673,12 @@ cs-agent/
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
-├── tests/                      # 228 unit/integration tests
+├── tests/                      # 284 unit/integration tests
 │   ├── conftest.py             # Fixtures: temp DB, FakeClassifier, FakeShopify
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests
 │   ├── test_storage.py         # Analytics + migration tests
-│   └── ...                     # 15 test files covering every module
+│   └── ...                     # 19 test files covering every module
 │
 ├── sales/                      # Sales collateral (Loom script, founding offer, safety proof)
 │
@@ -756,6 +795,9 @@ cd dashboard && npm run dev                 # Dashboard
 | Guided wizard UX pass (checklists, help panel, ready screen) | Medium | Done |
 | Human-approved cancel / edit-address / partial-refund actions | Critical | Done |
 | Per-category auto-send thresholds + calibration recommendations | High | Done |
+| Embeddable storefront chat widget (SSE streaming) | High | Done |
+| Incremental Shopify catalog sync + live stock in KB | High | Done |
+| ROI & impact dashboard | Medium | Done |
 | Circuit breakers for Shopify/Gorgias | Critical | Planned |
 | Conversation windowing (token budget) | Critical | Planned |
 | Dead-letter queue + Slack alerts | High | Planned |
@@ -812,7 +854,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 [![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/Ismail-2001)
 
 For inquiries about deployment, customization, or enterprise licensing:
-- Open a [GitHub Issue](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/issues)
+- Open a [GitHub Issue](https://github.com/Ismail-2001/customer-support-ai-employee/issues)
 - Connect via [GitHub Profile](https://github.com/Ismail-2001)
 
 ---
