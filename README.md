@@ -11,7 +11,7 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-284%20Python%20%7C%2099%20Frontend-brightgreen)](https://github.com/Ismail-2001/customer-support-ai-employee/actions)
+[![Tests](https://img.shields.io/badge/Tests-284%20Python%20%7C%2099%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -309,8 +309,8 @@ sequenceDiagram
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/Ismail-2001/customer-support-ai-employee.git
-cd customer-support-ai-employee
+git clone https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores.git
+cd AI-support-operations-platform-for-Shopify-stores
 cp .env.example .env
 ```
 
@@ -854,7 +854,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 [![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/Ismail-2001)
 
 For inquiries about deployment, customization, or enterprise licensing:
-- Open a [GitHub Issue](https://github.com/Ismail-2001/customer-support-ai-employee/issues)
+- Open a [GitHub Issue](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/issues)
 - Connect via [GitHub Profile](https://github.com/Ismail-2001)
 
 ---
