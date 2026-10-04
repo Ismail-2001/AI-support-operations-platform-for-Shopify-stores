@@ -28,6 +28,11 @@ CREATE TABLE IF NOT EXISTS kb_chunks (
     embedding TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS kb_sources (
+    source TEXT PRIMARY KEY,
+    content_hash TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -114,10 +119,41 @@ class KnowledgeBase:
             ) from e
 
     async def delete_source(self, source: str) -> None:
-        """Re-ingesting a policy page should replace the old chunks, not duplicate them."""
+        """Re-ingesting a policy page should replace the old chunks, not duplicate it."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("DELETE FROM kb_chunks WHERE source = ?", (source,))
+            await db.execute("DELETE FROM kb_sources WHERE source = ?", (source,))
             await db.commit()
+
+    async def get_source_hash(self, source: str) -> str | None:
+        """Content hash of the last successful ingest for this source (None = never
+        synced or source was deleted). Lets incremental sync skip unchanged docs
+        and avoid re-paying embedding calls on a 500-product catalog."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT content_hash FROM kb_sources WHERE source = ?", (source,)
+            )
+            row = await cursor.fetchone()
+            return row[0] if row else None
+
+    async def set_source_hash(self, source: str, content_hash: str) -> None:
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO kb_sources (source, content_hash, updated_at) VALUES (?, ?, datetime('now')) "
+                "ON CONFLICT(source) DO UPDATE SET content_hash = excluded.content_hash, "
+                "updated_at = excluded.updated_at",
+                (source, content_hash),
+            )
+            await db.commit()
+
+    async def list_sources(self, prefix: str = "") -> list[str]:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT source FROM kb_sources WHERE source LIKE ? ORDER BY source",
+                (f"{prefix}%",),
+            )
+            rows = await cursor.fetchall()
+            return [r[0] for r in rows]
 
     async def search(
         self, query: str, top_k: int = 3, min_score: float = 0.55

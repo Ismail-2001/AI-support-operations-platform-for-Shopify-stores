@@ -1,6 +1,8 @@
-"""Minimal Shopify Admin API client — just what the support agent needs: order lookup."""
+"""Minimal Shopify Admin API client — orders, catalog (paginated), metafields."""
 
+import re
 from typing import Any
+from urllib.parse import unquote
 
 import httpx
 import structlog
@@ -19,6 +21,23 @@ _EXP_BACKOFF = {
     "stop": stop_after_attempt(3),
     "wait": wait_exponential(multiplier=1, min=1, max=8),
 }
+
+_PAGE_INFO_RE = re.compile(r"page_info=([^&>]+)")
+
+
+def _parse_page_info(link_header: str | None) -> str | None:
+    """Extract the `page_info` cursor of rel="next" from Shopify's Link header.
+
+    Pure function so pagination is unit-testable without HTTP. Returns None when
+    there's no next page (single page, or end of catalog)."""
+    if not link_header:
+        return None
+    for part in link_header.split(","):
+        if 'rel="next"' in part:
+            match = _PAGE_INFO_RE.search(part)
+            if match:
+                return unquote(match.group(1))
+    return None
 
 
 def _is_transient_shopify_error(exc: BaseException) -> bool:
@@ -141,16 +160,76 @@ class ShopifyClient:
         **_EXP_BACKOFF,
     )
     async def get_products(self, limit: int = 50) -> list[dict[str, Any]]:
+        """Active products, following Shopify's Link cursor so catalogs larger than
+        one page (250 max) sync completely instead of silently truncating at 50."""
+        if not self.enabled:
+            raise ShopifyNotConfigured("Shopify credentials not set in .env")
+        limit = max(limit, 1)
+        page_size = min(limit, 250)
+        products: list[dict[str, Any]] = []
+        page_info: str | None = None
+        async with httpx.AsyncClient(timeout=15) as client:
+            while True:
+                params: dict[str, Any] = {"limit": page_size, "status": "active"}
+                if page_info:
+                    params["page_info"] = page_info
+                resp = await client.get(
+                    f"{self.base_url}/products.json", headers=self.headers, params=params
+                )
+                resp.raise_for_status()
+                page = resp.json().get("products", [])
+                products.extend(page)
+                if len(products) >= limit or not page:
+                    break
+                page_info = _parse_page_info(resp.headers.get("Link"))
+                if not page_info:
+                    break
+        return products[:limit]
+
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_product_metafields(self, product_id: int | str) -> list[dict[str, Any]]:
+        """Public/stored metafields for a product (care instructions, materials,
+        sizing guides, warranty live here on most stores).
+
+        Missing/forbidden metafields return [] instead of failing the whole sync —
+        a store without metafield permissions must still index everything else."""
+        if not self.enabled:
+            raise ShopifyNotConfigured("Shopify credentials not set in .env")
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                f"{self.base_url}/products/{product_id}/metafields.json",
+                headers=self.headers,
+                params={"limit": 50},
+            )
+            if resp.status_code in (403, 404):
+                logger.info("shopify_metafields_unavailable", product_id=product_id)
+                return []
+            resp.raise_for_status()
+            return resp.json().get("metafields", [])
+
+    @retry(
+        retry=retry_if_exception(_is_transient_shopify_error),
+        before_sleep=_log_retry_attempt,
+        **_EXP_BACKOFF,
+    )
+    async def get_product_by_handle(self, handle: str) -> dict[str, Any] | None:
+        """Live product fetch by handle — used for real-time inventory checks in the
+        dashboard's Test Product Knowledge tool (KB chunks carry sync-time stock)."""
         if not self.enabled:
             raise ShopifyNotConfigured("Shopify credentials not set in .env")
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.get(
                 f"{self.base_url}/products.json",
                 headers=self.headers,
-                params={"limit": limit, "status": "active"},
+                params={"handle": handle, "limit": 1},
             )
             resp.raise_for_status()
-            return resp.json().get("products", [])
+            products = resp.json().get("products", [])
+            return products[0] if products else None
 
     @retry(
         retry=retry_if_exception(_is_timeout_or_connection_error),

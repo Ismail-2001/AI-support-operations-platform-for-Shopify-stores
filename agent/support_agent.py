@@ -57,6 +57,65 @@ class CustomerSupportAgent:
         await store.add_message(ticket_id, MessageSender.CUSTOMER.value, message_body)
         return await self._process(ticket)
 
+    async def handle_ticket_stream(self, ticket: SupportTicket):
+        """Same as handle_ticket, but yields pipeline progress events instead of
+        blocking until the end — the chat widget shows live stage updates over SSE.
+
+        Yields dicts: {"type": "stage", "stage": <graph node>} as each node runs,
+        then exactly one {"type": "message", "decision": AgentDecision}. Persistence,
+        confidence gating, cost caps — identical to the blocking path (same graph)."""
+        await store.add_message(ticket.id, MessageSender.CUSTOMER.value, ticket.body)
+        async for event in self._stream(ticket):
+            yield event
+
+    async def handle_followup_stream(self, ticket_id: str, message_body: str):
+        """Streaming twin of handle_followup. Returns None-ish (yields an error event)
+        if the ticket vanished between session lookup and processing."""
+        ticket = await store.get_ticket_model(ticket_id)
+        if not ticket:
+            yield {"type": "error", "code": "TICKET_NOT_FOUND", "message": "Ticket not found"}
+            return
+        await store.add_message(ticket_id, MessageSender.CUSTOMER.value, message_body)
+        async for event in self._stream(ticket):
+            yield event
+
+    async def _stream(self, ticket: SupportTicket, dry_run: bool = False):
+        """Runs the graph with stream_mode="updates", surfacing each node as a stage
+        event and reconstructing the final AgentDecision from the accumulated state."""
+        accumulated: dict = {}
+        initial = {
+            "ticket": ticket,
+            "history": [],
+            "customer_message_count": 0,
+            "classification": None,
+            "order_context": None,
+            "order_used": False,
+            "knowledge_context": None,
+            "kb_used": False,
+            "suggestion": None,
+            "auto_sent": False,
+            "dry_run": dry_run,
+        }
+        async for update in self.graph.astream(initial, stream_mode="updates"):
+            if not isinstance(update, dict):
+                continue
+            for node_name, node_output in update.items():
+                if isinstance(node_output, dict):
+                    accumulated.update(node_output)
+                yield {"type": "stage", "stage": node_name}
+
+        yield {
+            "type": "message",
+            "decision": AgentDecision(
+                ticket_id=ticket.id,
+                classification=accumulated["classification"],
+                suggestion=accumulated["suggestion"],
+                order_context_used=accumulated.get("order_used", False),
+                kb_used=accumulated.get("kb_used", False),
+                auto_sent=accumulated.get("auto_sent", False),
+            ),
+        }
+
     async def _process(self, ticket: SupportTicket, dry_run: bool = False) -> AgentDecision:
         final_state = await self.graph.ainvoke(
             {

@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     SHOPIFY_SHOP_DOMAIN: str | None = None  # e.g. "my-store.myshopify.com"
     SHOPIFY_ACCESS_TOKEN: SecretStr | None = None
     SHOPIFY_API_VERSION: str = "2024-10"
+    # Max products the KB sync job will index per run (paginated at 250/page upstream).
+    PRODUCT_SYNC_LIMIT: int = 1000
 
     # --- Gorgias ---
     GORGIAS_DOMAIN: str | None = None  # e.g. "my-store" (becomes my-store.gorgias.com)
@@ -38,6 +40,19 @@ class Settings(BaseSettings):
 
     # --- Generic inbound channel webhook (WhatsApp/chat-widget/etc via /webhooks/inbound) ---
     INBOUND_WEBHOOK_SECRET: str | None = None
+
+    # --- Storefront chat widget (public /chat endpoints) ---
+    # Publishable store key the embeddable widget sends to identify this install.
+    # It is NOT a secret that guards money — it only lets a storefront open chat
+    # sessions (rate-limited per IP). Auto-generated into app_settings on first
+    # use if unset; rotate via POST /support/widget/key.
+    WIDGET_KEY: SecretStr | None = None
+    # Per-IP message/minute limit for the public /chat endpoints.
+    CHAT_RATE_LIMIT_PER_MINUTE: int = 20
+    # CORS origin regex for the widget. Default ".*": /chat is public-by-publishable-key
+    # and every /support endpoint still requires the private API key, which a foreign
+    # page cannot read. Set to your storefront origin(s) to tighten it.
+    WIDGET_ALLOWED_ORIGINS: str = ".*"
 
     # --- API security ---
     # Every /support/* endpoint EXCEPT the webhook endpoints requires this key in the

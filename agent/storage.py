@@ -132,6 +132,14 @@ CREATE TABLE IF NOT EXISTS app_settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS chat_sessions (
+    id TEXT PRIMARY KEY,
+    ticket_id TEXT,                   -- set once the first message creates the ticket
+    data TEXT NOT NULL,               -- JSON: email, name, order_number, handoff state
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 """
 
 
@@ -896,6 +904,145 @@ class TicketStore:
             "today_usd": await self.get_today_cost_usd(),
             "by_day": by_day,
             "by_stage": by_stage,
+        }
+
+    # ── Chat sessions (storefront widget channel) ──────────────
+
+    async def create_chat_session(self, session_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "INSERT INTO chat_sessions (id, ticket_id, data, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (session_id, None, json.dumps(data), now, now),
+            )
+            await db.commit()
+        return {
+            "id": session_id,
+            "ticket_id": None,
+            "data": data,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+    async def get_chat_session(self, session_id: str) -> dict[str, Any] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM chat_sessions WHERE id = ?", (session_id,))
+            row = await cursor.fetchone()
+        if not row:
+            return None
+        return {
+            "id": row["id"],
+            "ticket_id": row["ticket_id"],
+            "data": json.loads(row["data"]),
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
+
+    async def update_chat_session(
+        self, session_id: str, merge: dict[str, Any] | None = None, ticket_id: str | None = None
+    ) -> dict[str, Any] | None:
+        """Merge fields into the session's data JSON and/or attach the ticket id."""
+        existing = await self.get_chat_session(session_id)
+        if not existing:
+            return None
+        data = existing["data"]
+        if merge:
+            data.update(merge)
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE chat_sessions SET data = ?, ticket_id = COALESCE(?, ticket_id), "
+                "updated_at = ? WHERE id = ?",
+                (json.dumps(data), ticket_id, now, session_id),
+            )
+            await db.commit()
+        return await self.get_chat_session(session_id)
+
+    # ── ROI aggregates (raw numbers; policy lives in agent/roi.py) ──
+
+    async def get_roi_aggregates(self, since: str | None = None) -> dict[str, Any]:
+        """Raw windowed counts behind the ROI dashboard. `since` is an ISO timestamp
+        (created_at strings compare lexically). Returned uncomputed on purpose —
+        agent/roi.py applies the store owner's time/cost assumptions so the math
+        stays in one testable place."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            where = "WHERE created_at >= ?" if since else ""
+            cursor = await db.execute(
+                f"SELECT id, data, auto_sent, created_at FROM tickets {where} ORDER BY created_at ASC",
+                (since,) if since else (),
+            )
+            tickets = await cursor.fetchall()
+
+            cursor = await db.execute(
+                "SELECT DISTINCT ticket_id FROM messages WHERE sender_type = 'agent'"
+            )
+            responded_ids = {r["ticket_id"] for r in await cursor.fetchall()}
+
+            cursor = await db.execute("SELECT ticket_id, was_edited, category FROM edit_records")
+            edits = await cursor.fetchall()
+
+            cost_where = "WHERE date >= ?" if since else ""
+            since_date = since[:10] if since else None
+            cursor = await db.execute(
+                f"SELECT COALESCE(SUM(cost_usd), 0) AS total FROM llm_costs {cost_where}",
+                (since_date,) if since else (),
+            )
+            llm_cost = float((await cursor.fetchone())["total"])
+            cursor = await db.execute(
+                f"SELECT date, SUM(cost_usd) AS total FROM llm_costs {cost_where} GROUP BY date ORDER BY date",
+                (since_date,) if since else (),
+            )
+            cost_by_day = {r["date"]: float(r["total"]) for r in await cursor.fetchall()}
+
+        window_ids: set[str] = set()
+        by_day: dict[str, dict[str, int]] = {}
+        by_channel: dict[str, int] = {}
+        category_tickets: dict[str, int] = {}
+        auto_sent_count = 0
+        for row in tickets:
+            window_ids.add(row["id"])
+            ticket = json.loads(row["data"])
+            date = row["created_at"][:10]
+            day = by_day.setdefault(date, {"tickets": 0, "auto_sent": 0, "responded": 0})
+            day["tickets"] += 1
+            if row["auto_sent"]:
+                day["auto_sent"] += 1
+                auto_sent_count += 1
+            if row["id"] in responded_ids:
+                day["responded"] += 1
+            channel = ticket.get("channel") or "email"
+            by_channel[channel] = by_channel.get(channel, 0) + 1
+            category = ticket.get("category") or "unknown"
+            category_tickets[category] = category_tickets.get(category, 0) + 1
+
+        responded = len(window_ids & responded_ids)
+        edited_ids = {e["ticket_id"] for e in edits if e["was_edited"]}
+        edited = len(window_ids & edited_ids)
+
+        category_edits: dict[str, dict[str, int]] = {}
+        for e in edits:
+            if e["ticket_id"] not in window_ids:
+                continue
+            cat = e["category"] or "unknown"
+            bucket = category_edits.setdefault(cat, {"total": 0, "edited": 0})
+            bucket["total"] += 1
+            if e["was_edited"]:
+                bucket["edited"] += 1
+
+        return {
+            "total": len(tickets),
+            "auto_sent": auto_sent_count,
+            "responded": responded,
+            "edited": edited,
+            "by_day": by_day,
+            "by_channel": by_channel,
+            "category_edits": category_edits,
+            "category_tickets": category_tickets,
+            "llm_cost_usd": round(llm_cost, 6),
+            "llm_cost_by_day": cost_by_day,
         }
 
     @staticmethod

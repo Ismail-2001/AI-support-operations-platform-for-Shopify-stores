@@ -4,11 +4,11 @@ Endpoints for ticket ingestion (manual + Gorgias webhook), suggestions, response
 """
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, Request
 from pydantic import BaseModel, Field, field_validator
 
 from agent.auth import check_shared_secret, verify_api_key
@@ -20,12 +20,15 @@ from agent.models import (
     SupportTicket,
     TicketChannel,
 )
+from agent.product_knowledge import stock_snapshot
+from agent.product_sync import get_sync_status, run_sync, start_sync
 from agent.rate_limit import (
     rate_limit_action,
     rate_limit_default,
     rate_limit_refund,
     rate_limit_resend,
 )
+from agent.roi import compute_roi, get_roi_settings, save_roi_settings
 from agent.storage import storage_is_ephemeral, store
 from agent.support_agent import CustomerSupportAgent
 from api.errors import (
@@ -931,33 +934,42 @@ async def ingest_knowledge(req: KBIngestRequest):
 
 
 @router.post("/knowledge-base/sync-shopify")
-async def sync_knowledge_from_shopify():
-    """Pulls Settings > Policies and active product descriptions from Shopify and ingests
-    them as knowledge base content. Run this once after setup and again whenever policies
-    or the catalog change meaningfully."""
+async def sync_knowledge_from_shopify(
+    background_tasks: BackgroundTasks, force: bool = Query(False)
+):
+    """Starts an incremental Shopify → KB sync in the background (policies + full
+    active catalog with variants/metafields/alt-text). Returns immediately; poll
+    GET /support/knowledge-base/sync-status for progress. Unchanged documents are
+    hash-skipped, so re-running is cheap. `?force=true` re-embeds everything."""
     if not _agent.shopify.enabled:
         raise_not_configured("Shopify")
+    if not start_sync(force=force):
+        return {"status": "running"}
+    background_tasks.add_task(run_sync, force)
+    return {"status": "started", "force": force}
 
-    total_chunks = 0
-    try:
-        policies = await _agent.shopify.get_shop_policies()
-        for title, body in policies.items():
-            source = f"policy:{title.lower().replace(' ', '-')}"
-            await knowledge_base.delete_source(source)
-            total_chunks += await knowledge_base.ingest(source, title, body)
 
-        products = await _agent.shopify.get_products(limit=50)
-        for p in products:
-            source = f"product:{p.get('handle', p.get('id'))}"
-            content = f"{p.get('title', '')}\n\n{p.get('body_html', '')}"
-            await knowledge_base.delete_source(source)
-            total_chunks += await knowledge_base.ingest(
-                source, p.get("title", "Untitled product"), content
-            )
-    except ShopifyNotConfigured:
+@router.get("/knowledge-base/sync-status")
+async def knowledge_sync_status():
+    """Progress of the background catalog sync (started/running/finished + counters)."""
+    return get_sync_status()
+
+
+@router.get("/knowledge-base/live-stock")
+async def live_product_stock(handle: str = Query(..., min_length=1, max_length=200)):
+    """Real-time inventory for a product handle — the KB chunk carries stock as of
+    the last sync; this answers "is it actually in stock right now." """
+    if not _agent.shopify.enabled:
         raise_not_configured("Shopify")
-
-    return {"status": "synced", "total_chunks": total_chunks}
+    product = await _agent.shopify.get_product_by_handle(handle)
+    if not product:
+        raise_not_found("product", handle)
+    return {
+        "handle": product.get("handle"),
+        "title": product.get("title"),
+        "variants": stock_snapshot(product),
+        "checked_at": datetime.now(UTC).isoformat(),
+    }
 
 
 @router.get("/knowledge-base")
@@ -1220,6 +1232,36 @@ async def get_auto_send_analytics():
     return await get_auto_send_report()
 
 
+class RoiSettingsRequest(BaseModel):
+    """The store owner's own assumptions — visible, editable, and stored in KV.
+    These drive every estimated number on the ROI page; measured numbers (LLM
+    cost, ticket counts) never depend on them."""
+
+    minutes_per_auto_sent: float = Field(10, gt=0, le=240)
+    minutes_per_draft: float = Field(5, gt=0, le=240)
+    hourly_rate_usd: float = Field(25, gt=0, le=1000)
+
+
+@router.get("/analytics/roi")
+async def get_roi_report(days: str = Query("7", pattern=r"^(all|[1-9]\d{0,3})$")):
+    """ROI/impact report: measured LLM spend vs estimated human-time savings.
+    `days` = 7 | 30 | a number of days | all. Estimates use the assumptions from
+    PUT /support/analytics/roi/settings (defaults: 10 min/auto-sent, 5 min/draft,
+    $25/hour)."""
+    since = None if days == "all" else (datetime.now(UTC) - timedelta(days=int(days))).isoformat()
+    raw = await store.get_roi_aggregates(since)
+    report = compute_roi(raw, await get_roi_settings())
+    report["days"] = days
+    report["since"] = since
+    return report
+
+
+@router.put("/analytics/roi/settings")
+async def update_roi_settings(req: RoiSettingsRequest):
+    """Update the ROI assumptions and return the effective values."""
+    return {"assumptions": await save_roi_settings(req.model_dump())}
+
+
 class ThresholdUpdateRequest(BaseModel):
     category: str
     min_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -1276,6 +1318,59 @@ async def update_automation_threshold(req: ThresholdUpdateRequest):
                 "source": source if effective is not None else entry["source"],
             }
     raise_unprocessable(f"unknown category '{req.category}'")
+
+
+# ── Storefront chat widget settings ───────────────────────────
+
+
+@router.get("/widget")
+async def get_widget_settings():
+    """Publishable key + appearance config for the embeddable chat widget.
+    The key is safe to expose (it ships in the storefront's <script> tag) — it only
+    gates chat sessions; this endpoint itself stays behind the private API key."""
+    from agent.widget_store import get_widget_config, get_widget_key
+
+    return {"key": await get_widget_key(), "config": await get_widget_config()}
+
+
+class WidgetConfigUpdate(BaseModel):
+    enabled: bool | None = None
+    title: str | None = Field(default=None, max_length=80)
+    greeting: str | None = Field(default=None, max_length=200)
+    welcome_message: str | None = Field(default=None, max_length=400)
+    color: str | None = Field(default=None, max_length=7)
+    logo_url: str | None = Field(default=None, max_length=500)
+    show_confidence: bool | None = None
+
+
+@router.put("/widget")
+async def update_widget_settings(req: WidgetConfigUpdate):
+    """Update widget appearance/behavior at runtime — applies to the live widget
+    immediately (it re-fetches config on load), no redeploy."""
+    from agent.widget_store import set_widget_config
+
+    try:
+        config = await set_widget_config(req.model_dump(exclude_none=True))
+    except ValueError as e:
+        raise_unprocessable(str(e))
+    return {"config": config}
+
+
+@router.post("/widget/key")
+async def rotate_widget_key_endpoint():
+    """Rotate the publishable widget key. Old key stops working on the next request;
+    re-copy the install snippet into the storefront. Refuses when WIDGET_KEY is set
+    in .env (env wins — rotate it there instead)."""
+    from agent.widget_store import rotate_widget_key, widget_key_is_env_managed
+
+    if widget_key_is_env_managed():
+        raise APIError(
+            code="WIDGET_KEY_ENV_MANAGED",
+            message="WIDGET_KEY is set in .env — rotate it there, then restart.",
+            status=409,
+        )
+    key = await rotate_widget_key()
+    return {"key": key}
 
 
 @router.get("/analytics/costs")

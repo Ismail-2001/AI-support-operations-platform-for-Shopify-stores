@@ -18,6 +18,7 @@ from fastapi.responses import JSONResponse
 from agent.config import settings
 from agent.knowledge_base import knowledge_base
 from agent.storage import storage_is_ephemeral, store
+from api.chat import chat_router
 from api.customer_support import public_router, webhook_router
 from api.customer_support import router as support_router
 from api.errors import APIError
@@ -110,23 +111,33 @@ app.add_middleware(RequestLoggingMiddleware)
 app.add_middleware(RequestIDMiddleware)
 app.add_middleware(WebhookBodyLimitMiddleware)
 
-# CORS: only your dashboard's own domain(s) should be allowed to call this from a browser.
-# Server-to-server calls (Gorgias webhooks, your own backend) are unaffected by CORS —
-# this only restricts what a webpage's JavaScript is allowed to do.
+# CORS: /chat (the storefront widget) must work from any storefront origin — it
+# authenticates with the publishable widget key + per-IP rate limit, and the
+# private API key still guards every /support/* endpoint from browser callers.
+# WIDGET_ALLOWED_ORIGINS tightens this to your storefront(s) if you want
+# (regex, default ".*"). ALLOWED_ORIGINS adds explicit dashboard origin(s).
 _allowed_origins = [o.strip() for o in settings.ALLOWED_ORIGINS.split(",") if o.strip()]
-if _allowed_origins:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=_allowed_origins,
-        allow_credentials=True,
-        allow_methods=["GET", "POST", "PATCH", "PUT"],
-        allow_headers=["X-API-Key", "Content-Type", "Idempotency-Key", "X-Webhook-Secret"],
-    )
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=_allowed_origins,
+    allow_origin_regex=settings.WIDGET_ALLOWED_ORIGINS or None,
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "PUT"],
+    allow_headers=[
+        "X-API-Key",
+        "Content-Type",
+        "Idempotency-Key",
+        "X-Webhook-Secret",
+        "X-Widget-Key",
+        "Accept",
+    ],
+)
 
 app.include_router(support_router)
 app.include_router(setup_router)
 app.include_router(webhook_router)
 app.include_router(public_router)
+app.include_router(chat_router)
 
 
 @app.exception_handler(APIError)
