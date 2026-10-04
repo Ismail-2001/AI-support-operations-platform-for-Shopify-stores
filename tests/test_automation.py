@@ -28,6 +28,22 @@ from agent.config import settings
 from agent.models import Sentiment, TicketCategory, TicketPriority
 from tests.conftest import FakeClassifier, FakeResponseEngine, FakeShopify
 
+
+@pytest.fixture(autouse=True)
+def _restore_store_singletons():
+    """_wire() swaps agent.storage.store and agent.support_agent.store for its tests.
+    Restore both afterwards — other test files import api.chat, which name-binds
+    `store` at import time; a leaked swap sends those modules to a stale DB."""
+
+    import agent.support_agent as sa
+
+    orig_storage = storage_module.store
+    orig_sa = sa.store
+    yield
+    storage_module.store = orig_storage
+    sa.store = orig_sa
+
+
 # ── suggest_threshold (pure) ────────────────────────────────
 
 
