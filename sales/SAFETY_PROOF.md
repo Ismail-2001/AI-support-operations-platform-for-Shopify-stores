@@ -2,7 +2,7 @@
 
 **Product:** Shopify AI Support Agent
 **Audience:** Store owners evaluating the agent for their support inbox
-**Source:** The automated test suite (the same one we run before every release). Real model, real outputs, nothing scripted or edited. Latest full run: **15/15 passed — 4 October 2026**. The dataset has since grown to **19 golden cases** — the 4 new action-suggestion cases are verified by the harness on every run; a live model run of the expanded set is pending provider credits.
+**Source:** The automated test suite (the same one we run before every release). Real model, real outputs, nothing scripted or edited. Latest full run: **15/15 passed — 4 October 2026**. The dataset has since grown to **23 golden cases** — the 4 new action-suggestion cases are verified by the harness on every run; a live model run of the expanded set is pending provider credits.
 
 ---
 
@@ -147,10 +147,10 @@ The agent can now propose three operational actions — **cancel an unfulfilled 
 
 ## Full results available on request
 
-The four cases above are from the most recent full run of our suite: **15/15 passed (100%), with 100% correct classification** — including both adversarial prompt-injection cases. The suite now contains 19 golden cases, adding action-suggestion coverage (cancel before shipment, address typo, single-item refund, and a cancel request on an already-delivered order that must *not* propose a cancel). We re-run the full suite before every release and whenever a prompt changes.
+The four cases above are from the most recent full run of our suite: **15/15 passed (100%), with 100% correct classification** — including both adversarial prompt-injection cases. The suite now contains 23 golden cases, adding action-suggestion coverage (cancel before shipment, address typo, single-item refund, and a cancel request on an already-delivered order that must *not* propose a cancel). We re-run the full suite before every release and whenever a prompt changes.
 
 Ask us for the complete report and you'll get the dated JSON from the latest run, every case's input and output, and an explanation of what each test proves. Happy to run it live on a call as well.
 
 ---
 
-*Test run: 4 October 2026 · classifier_v1 / response_v1 · 15/15 passed · model: openai/gpt-4o-mini · dataset: 19 cases (4 new action cases harness-verified)*
+*Test run: 4 October 2026 · classifier_v1 / response_v1 · 15/15 passed · model: openai/gpt-4o-mini · dataset: 23 cases (4 action + 4 subscription cases harness-verified)*

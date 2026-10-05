@@ -1,7 +1,7 @@
 # DEPLOYMENT CHECKLIST — cs-agent on Render
 
 ## Prerequisites
-- GitHub account with `customer-support-ai-employee` repo pushed
+- GitHub account with `AI-support-operations-platform-for-Shopify-stores` repo pushed
 - Render account (sign up at https://render.com)
 - Shopify store, Gorgias account, OpenRouter API key ready
 
@@ -12,7 +12,7 @@
 1. Go to https://dashboard.render.com
 2. Click **New +** → **Blueprint**
 3. Connect your GitHub account
-4. Select **Ismail-2001/customer-support-ai-employee**
+4. Select **Ismail-2001/AI-support-operations-platform-for-Shopify-stores**
 5. Render auto-detects `render.yaml` → click **Apply**
 
 ---
@@ -38,12 +38,21 @@ The Blueprint will pre-fill all vars from `render.yaml`. **Every var marked `syn
 | `API_KEY` | Generate locally: `python3 -c "import secrets; print(secrets.token_urlsafe(32))"` |
 | `INBOUND_WEBHOOK_SECRET` | Same generation method as `API_KEY` |
 
+### Optional integration variables (leave blank to disable)
+
+| Variable | Where to Get It |
+|----------|-----------------|
+| `RECHARGE_API_TOKEN` | Recharge merchant portal → Apps → API tokens (pause/skip/cancel/frequency) |
+| `SKIO_API_TOKEN` | Skio dashboard → Integrations → API (alternative subscription provider) |
+| `SHIPENGINE_API_KEY` | https://app.shipengine.com → Settings → API Keys (return labels) |
+| `RETURN_ADDRESS_*` | Your return origin address — required to actually buy a return label |
+
 ### Pre-filled `sync: true` / `value:` Variables (auto-set by Blueprint):
 - `OPENROUTER_MODEL` = `openai/gpt-4o-mini`
 - `FALLBACK_MODEL` = `claude-haiku-4-5-20251001`
 - `AUTO_SEND_ENABLED` = `false`
 - `AUTO_SEND_MIN_CONFIDENCE` = `0.85`
-- `AUTO_SEND_BLOCKED_CATEGORIES` = `refund,complaint,legal,other`
+- `AUTO_SEND_BLOCKED_CATEGORIES` = `refund,complaint,legal,other,subscription`
 - `DB_PATH` = `cs_agent.db` (ephemeral — wiped on deploy)
 - `ENV` = `production`
 - `REQUIRE_API_KEY` = `true`
@@ -95,7 +104,7 @@ In Gorgias: **Settings → REST API → Webhooks**
 ./scripts/smoke_test.sh https://cs-agent-xxxx.onrender.com YOUR_API_KEY
 ```
 
-Expected: all 4 checks PASS
+Expected: all 6 checks PASS
 
 ---
 
@@ -112,8 +121,11 @@ integrations work against production credentials:
    processed **once** (no duplicate reply). Check the audit row count.
 4. **Cost cap** — temporarily set `DAILY_COST_CAP_USD=0.01`, send traffic,
    confirm `AUTO_SEND` is force-disabled and replies stop at the cap.
+5. **Multi-store routing** — `GET /support/stores` returns 200; calling any
+   endpoint with `X-Store-Id: bogus` returns `404 STORE_NOT_FOUND` (the smoke
+   test now covers both).
 
-Only after all four pass should you consider flipping `AUTO_SEND_ENABLED=true`.
+Only after all five pass should you consider flipping `AUTO_SEND_ENABLED=true`.
 
 ---
 

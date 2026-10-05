@@ -17,7 +17,7 @@ echo "Target: $BASE_URL"
 echo ""
 
 # 1. Public health
-echo "--- [1/4] GET /health ---"
+echo "--- [1/6] GET /health ---"
 status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/health")
 body=$(curl -s "$BASE_URL/health")
 if [ "$status" = "200" ]; then
@@ -28,7 +28,7 @@ fi
 echo "  body: $body"
 
 # 2. Authenticated health
-echo "--- [2/4] GET /support/health ---"
+echo "--- [2/6] GET /support/health ---"
 status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/support/health" -H "X-API-Key: $API_KEY")
 body=$(curl -s "$BASE_URL/support/health" -H "X-API-Key: $API_KEY")
 if [ "$status" = "200" ]; then
@@ -39,7 +39,7 @@ fi
 echo "  body: $body"
 
 # 3. Create a ticket (exercises LLM)
-echo "--- [3/4] POST /support/tickets ---"
+echo "--- [3/6] POST /support/tickets ---"
 TS=$(date +%s)
 payload=$(cat <<EOF
 {
@@ -68,7 +68,7 @@ fi
 echo "  body: $body"
 
 # 4. List tickets (verify persistence)
-echo "--- [4/4] GET /support/tickets ---"
+echo "--- [4/6] GET /support/tickets ---"
 status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/support/tickets" -H "X-API-Key: $API_KEY")
 body=$(curl -s "$BASE_URL/support/tickets" -H "X-API-Key: $API_KEY")
 if [ "$status" = "200" ]; then
@@ -78,6 +78,30 @@ else
 fi
 COUNT=$(echo "$body" | grep -o '"id"' | wc -l)
 echo "  total tickets returned: $COUNT"
+
+# 5. Store registry reachable (agency mode)
+echo "--- [5/6] GET /support/stores ---"
+status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/support/stores" -H "X-API-Key: $API_KEY")
+body=$(curl -s "$BASE_URL/support/stores" -H "X-API-Key: $API_KEY")
+if [ "$status" = "200" ]; then
+  pass "/support/stores returned 200"
+else
+  fail "/support/stores returned $status (expected 200)"
+fi
+echo "  body: $body"
+
+# 6. X-Store-Id middleware rejects unknown stores
+echo "--- [6/6] GET /support/tickets with unknown X-Store-Id ---"
+status=$(curl -s -o /dev/null -w "%{http_code}" "$BASE_URL/support/tickets" \
+  -H "X-API-Key: $API_KEY" -H "X-Store-Id: smoke-test-nonexistent")
+body=$(curl -s "$BASE_URL/support/tickets" \
+  -H "X-API-Key: $API_KEY" -H "X-Store-Id: smoke-test-nonexistent")
+if [ "$status" = "404" ] && echo "$body" | grep -q "STORE_NOT_FOUND"; then
+  pass "unknown X-Store-Id returned 404 STORE_NOT_FOUND"
+else
+  fail "unknown X-Store-Id returned $status (expected 404 STORE_NOT_FOUND)"
+fi
+echo "  body: $body"
 
 # Summary
 echo ""

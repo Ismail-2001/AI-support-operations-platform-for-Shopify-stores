@@ -101,3 +101,6 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# Local backup / junk folders (never commit)
+dashboard/nm_backup/

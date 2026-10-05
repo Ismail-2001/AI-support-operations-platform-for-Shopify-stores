@@ -681,11 +681,15 @@ cs-agent/
 │   ├── response_engine.py      # Response drafting (LLM + structured output)
 │   ├── support_agent.py        # Orchestrator: handle_ticket / handle_followup
 │   ├── storage.py              # SQLite + WAL-backed ticket store + migrations
+│   ├── multistore.py           # Store registry, per-store DBs, X-Store-Id context
+│   ├── context_proxy.py        # Context-aware singleton proxy (store/KB/agent)
+│   ├── returns.py              # Return eligibility policy (pure, unit-tested)
 │   ├── auth.py                 # API key + webhook secret verification
 │   ├── rate_limit.py           # In-memory sliding window rate limiter
 │   ├── knowledge_base.py       # Local RAG: chunk, embed, cosine search
 │   ├── product_knowledge.py    # Shopify product → KB document builder
 │   ├── product_sync.py         # Incremental catalog sync (content-hashed)
+│   ├── automation.py           # Auto-send gating + per-category thresholds
 │   ├── roi.py                  # ROI report math (hours/labor vs LLM cost)
 │   ├── widget_store.py         # Publishable widget key + widget config
 │   ├── conversation.py         # Transcript formatter for LLM context
@@ -695,26 +699,30 @@ cs-agent/
 │
 ├── api/                        # FastAPI application
 │   ├── main.py                 # Entrypoint, middleware, CORS, exception handlers
-│   ├── customer_support.py     # All routes (tickets, actions, KB, analytics)
+│   ├── customer_support.py     # All routes (tickets, actions, stores, KB, analytics)
 │   ├── chat.py                 # Public storefront chat: sessions + SSE streams
 │   ├── setup.py                # Onboarding wizard (Shopify, policies, voice, test)
 │   ├── errors.py               # Structured APIError class + error codes
-│   └── middleware.py           # RequestID, logging, webhook body limit
+│   └── middleware.py           # RequestID, logging, X-Store-Id context, body limit
 │
 ├── integrations/               # External API clients
-│   ├── shopify.py              # Shopify Admin API (orders, refunds, reorders)
-│   └── gorgias.py              # Gorgias REST API (replies, notes, webhook parsing)
+│   ├── shopify.py              # Shopify Admin API (orders, refunds, reorders, tags)
+│   ├── gorgias.py              # Gorgias REST API (replies, notes, webhook parsing)
+│   ├── subscriptions.py        # Recharge/Skio facade (normalization + state guards)
+│   ├── recharge.py             # Recharge admin REST client
+│   ├── skio.py                 # Skio GraphQL client
+│   └── shipengine.py           # ShipEngine rates + return-label purchase
 │
 ├── dashboard/                  # React + TypeScript operator dashboard
 │   └── src/
-│       ├── components/         # Sidebar, Badges, ConfidenceBar, Toast, etc.
-│       ├── pages/              # Tickets, Analytics, ROI, Knowledge base, Widget, Setup
+│       ├── components/         # Sidebar, Badges, ConfidenceBar, approval panels, etc.
+│       ├── pages/              # Tickets, Analytics, ROI, Knowledge base, Widget, Setup, Stores
 │       ├── widget/             # Embeddable storefront widget (esbuild bundle)
-│       └── lib/                # API client, ThemeProvider, types
+│       └── lib/                # API client (X-Store-Id header), ThemeProvider, types
 │
 ├── evals/                      # Golden-dataset evaluation framework
-│   ├── golden_dataset.json     # 15 labeled test cases
-│   ├── run_evals.py            # Eval runner
+│   ├── golden_dataset.json     # 23 labeled test cases
+│   ├── run_evals.py            # Eval runner (per-case subscription context)
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
@@ -723,7 +731,10 @@ cs-agent/
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests
 │   ├── test_storage.py         # Analytics + migration tests
-│   └── ...                     # 19 test files covering every module
+│   ├── test_subscriptions.py   # Recharge/Skio clients + action endpoints
+│   ├── test_returns.py         # Return eligibility + ShipEngine label endpoints
+│   ├── test_multistore.py      # Store registry, X-Store-Id isolation, proxies
+│   └── ...                     # 22 test files covering every module
 │
 ├── sales/                      # Sales collateral (Loom script, founding offer, safety proof)
 │

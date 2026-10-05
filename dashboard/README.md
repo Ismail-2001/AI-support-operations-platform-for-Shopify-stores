@@ -36,9 +36,10 @@ block the requests via CORS.
 | Screen | What it does |
 |---|---|
 | **Tickets** | Filterable list, each row shows category/priority and the AI's confidence at a glance |
-| **Ticket detail** | Full conversation thread + a decision panel: confidence, reasoning, edit-and-send the draft, approve/deny a suggested refund, expand the raw pipeline trace |
+| **Ticket detail** | Full conversation thread + a decision panel: confidence, reasoning, edit-and-send the draft, approve/deny refunds, cancel/edit-address, subscription operations (pause/skip/cancel/frequency/address), return-label purchase, expand the raw pipeline trace |
 | **Analytics** | Volume, confidence calibration chart, edit-rate-by-category, and daily LLM spend |
 | **Knowledge base** | Sync from Shopify, add FAQ content manually, test what the agent would retrieve for a given question |
+| **Stores** | Register stores for agency mode, attach Shopify tokens, activate a store from the sidebar switcher — every API call then carries that store's `X-Store-Id` |
 
 ## Design notes
 

@@ -25,6 +25,8 @@ Your support team spends **60-70% of their time** on these repetitive tickets. Y
 | *"This is the 3rd time I'm asking"* | Detects escalation, flags as urgent, routes to your top agent |
 | *"My order arrived damaged"* | Suggests a refund amount with reason — you approve with one click |
 | *"Can you resend it?"* | Creates a replacement order — you approve, Shopify ships it |
+| *"Pause my subscription"* | Reads Recharge/Skio state, proposes pause/skip/cancel — you approve one click |
+| *"Can I return this?"* | Checks the return window, quotes a ShipEngine label — you approve the cost |
 | *"Is this waterproof?"* | Searches your product catalog, answers from your spec sheet |
 
 ---
@@ -46,7 +48,7 @@ cs-agent drafts a reply with a confidence score
         ├── Confidence ≥ 85% & category allows auto-send
         │   └── Reply sent to customer automatically
         │
-        └── Confidence < 85% OR refund/complaint/legal category
+        └── Confidence < 85% OR refund/complaint/legal/subscription category
             └── Draft posted as internal note for human review
 ```
 
@@ -83,6 +85,8 @@ You keep your existing stack (Shopify + Gorgias). The AI plugs in between.
 
 - **Refunds** are suggested by AI, **approved** by you via one click
 - **Replacement orders** are created by AI, **approved** by you
+- **Subscription changes** (pause/skip/cancel/frequency) are proposed by AI, **approved** by you — the state is re-checked right before the call
+- **Return labels** are quoted before purchase — **you approve** the cost; out-of-window requests are declined, not guessed
 - **Low-confidence drafts** (< 85%) never go to customers
 - **Angry customers** (very_negative sentiment) always get a human
 - **3rd follow-up** auto-escalates to urgent + forces human review
@@ -106,6 +110,6 @@ This isn't a wrapper around ChatGPT with a Shopify prompt. It's a purpose-built 
 **Ismail Sajid** — Principal AI Engineer
 
 - GitHub: [github.com/Ismail-2001](https://github.com/Ismail-2001)
-- Project repo: [customer-support-ai-employee](https://github.com/Ismail-2001/customer-support-ai-employee)
+- Project repo: [AI-support-operations-platform-for-Shopify-stores](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores)
 
 Schedule a 15-minute demo. I'll connect cs-agent to your Shopify store and show you handling real tickets live.
