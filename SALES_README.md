@@ -92,6 +92,8 @@ You keep your existing stack (Shopify + Gorgias). The AI plugs in between.
 - **3rd follow-up** auto-escalates to urgent + forces human review
 - **Daily cost cap** — auto-send disabled when LLM spend exceeds budget
 - **Every action has an audit trail** — who approved what, when, and which Shopify order
+- **When Shopify or Gorgias has an outage**, calls fail fast with a clear retryable error instead of hanging — nothing half-executes
+- **A failed webhook is preserved, alerted, and redriven by you** — the agent never improvises a reply for an event it couldn't process
 
 ---
 

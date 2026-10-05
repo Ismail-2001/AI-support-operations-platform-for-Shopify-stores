@@ -135,6 +135,10 @@ Returns get a policy eligibility check (refund state, fulfillment, return window
 
 Requests carrying an `X-Store-Id` header resolve tickets, knowledge, audits, and the agent's Shopify credentials to that store's own database file and registry entry, while `/support/stores` stays a global admin surface (credentials write-only). Integration settings — ShipEngine key, Recharge/Skio tokens, subscription provider, return address, return window — live **per store** in the registry; env vars only apply outside store scope, so a store never falls back to another tenant's secrets. The dashboard ships a **Stores** page (register stores, attach shop tokens, configure integrations, delete) and a sidebar store switcher — switching remounts the workspace in the new context. No header = default store, so single-store deployments behave exactly as before.
 
+### Operational Resilience
+
+Outbound integrations (Shopify, Gorgias, Recharge, Skio, ShipEngine) sit behind **retry with backoff** (HTTP 429/5xx/timeout predicates, `reraise` so callers see the real error) and **circuit breakers**: after five logical failures a breaker opens and calls fail fast with `503 CIRCUIT_OPEN` instead of hanging — states are surfaced on `/health` and `/support/health`. Webhook processing failures never lose an event: the payload is preserved as a **dead letter** for operator redrive (`GET /support/dead-letters`, `POST /support/dead-letters/{id}/retry` — replays through the original processor in the payload's store scope), the caller still gets a 2xx so Gorgias doesn't retry-storm, and an alert fires. **Alerting** posts to a Slack-compatible `ALERT_WEBHOOK_URL` on circuit opens, dead letters and cost-cap breaches (throttled per event type; a no-op when unset). Conversation history fed to the LLM is windowed to `MAX_HISTORY_MESSAGES` (default 40) so long tickets stay flat on token cost — while repeat-contact escalation keeps counting the **full** thread.
+
 <details>
 <summary><b>Competitive Advantages — Why This Beats Generic Chatbots</b></summary>
 
@@ -301,7 +305,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 370 Python + 125 frontend tests |
+| **Testing** | Pytest + Vitest | 418 Python + 129 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -411,6 +415,8 @@ Dashboard: **http://localhost:5173**
 | `GORGIAS_EMAIL` | Optional† | Gorgias login email |
 | `GORGIAS_API_KEY` | Optional† | Gorgias REST API key |
 | `API_KEY` | Yes | Auth key for all `/support/*` endpoints |
+| `ALERT_WEBHOOK_URL` | No | Slack-compatible webhook for operational alerts (circuit opened, dead letter recorded, cost cap exceeded) |
+| `MAX_HISTORY_MESSAGES` | No | Recent messages fed to the LLM prompt per run (default `40`; `0` = full history) |
 
 *At least one chat provider key is required (`OPENROUTER_API_KEY` > `GROQ_API_KEY` > `GOOGLE_API_KEY` — first match wins). `GOOGLE_API_KEY` is additionally required for the Knowledge Base.*
 
@@ -492,6 +498,7 @@ Global admin surface — these endpoints ignore any `X-Store-Id` on the request,
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/support/stores` | List registered stores |
+| `GET` | `/support/stores/summary` | Fleet health: integration counts + per-store integration flags and product-sync state |
 | `POST` | `/support/stores` | Register a store (`name`, optional `shop_domain`, `shopify_access_token`) — 409 on duplicate domain |
 | `GET` | `/support/stores/{id}` | Store detail |
 | `PATCH` | `/support/stores/{id}` | Rename / attach or clear the Shopify token, or set per-store integration settings (`shipengine_api_key`, `recharge_api_token`, `skio_api_token`, `subscription_provider`, `return_address`, `return_window_days` - send `""`/`{}`/`0` to clear) (invalidates the cached store context) |
@@ -515,6 +522,17 @@ Any other endpoint called with `X-Store-Id: <id>` operates inside that store's i
 | `POST` | `/support/webhooks/gorgias/ticket-created` | Gorgias new-ticket webhook | `X-Webhook-Secret` |
 | `POST` | `/support/webhooks/gorgias/message-created` | Gorgias follow-up message webhook | `X-Webhook-Secret` |
 | `POST` | `/support/webhooks/inbound` | Generic channel (WhatsApp, chat widget, etc.) | `X-Webhook-Secret` |
+
+Webhooks that crash mid-processing return `200 {"received": true, "queued": true}` with the payload preserved in the dead-letter queue below — Gorgias never retry-storms us, and nothing is silently lost.
+
+### Dead Letters (failed webhook payloads)
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/support/dead-letters?status=pending` | List failed payloads (newest first) + pending count |
+| `POST` | `/support/dead-letters/{id}/retry` | Redrive through the original processor — `200 retried`, `502 REDRIVE_FAILED`, `409 ALREADY_RETRIED`, `422 UNSUPPORTED_SOURCE` |
+
+Redrives run in the payload's original store scope (row's `store_id`); a deleted store returns `409 STORE_GONE` rather than replaying into the wrong database.
 
 ### Knowledge Base
 
@@ -560,9 +578,10 @@ Widget settings (API Key):
 | `PUT` | `/support/automation/thresholds` | Set/clear a per-category runtime override (no redeploy; null clears) |
 | `GET` | `/support/analytics/costs` | Real LLM spend by day and stage |
 | `GET` | `/support/analytics/roi?days=7` | ROI report: hours saved, labor $, LLM cost, net savings |
+| `GET` | `/support/analytics/pilot?days=7` | Pilot metrics: auto-resolve %, human edit rate, TTFR (mean + median), LLM spend |
 | `PUT` | `/support/analytics/roi/settings` | Update time/cost assumptions (minutes per task, hourly rate) |
 | `GET` | `/support/tickets/{id}/trace` | Full pipeline trace ("why did it say that?") |
-| `GET` | `/support/health` | Shopify/Gorgias connection status |
+| `GET` | `/support/health` | Shopify/Gorgias connection status + circuit-breaker states |
 
 ### Structured Error Responses
 
@@ -575,7 +594,9 @@ All errors follow a consistent format:
 }
 ```
 
-Error codes: `TICKET_NOT_FOUND`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `NO_ORDER_LINKED`, `REFUND_EXCEEDS_TOTAL`, `REFUND_FAILED`, `REFUND_LINE_ITEM_NOT_FOUND`, `REFUND_QUANTITY_EXCEEDS_ORDER`, `RESEND_FAILED`, `ORDER_ALREADY_CANCELLED`, `ORDER_ALREADY_FULFILLED`, `ORDER_CANNOT_CANCEL`, `CANCEL_FAILED`, `ADDRESS_UPDATE_REJECTED`, `EDIT_ADDRESS_FAILED`, `IDEMPOTENCY_KEY_CONFLICT`, `NO_GORGIAS_LINK`, `NOT_CONFIGURED`, `INTERNAL_SERVER_ERROR`.
+Error codes: `TICKET_NOT_FOUND`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `NO_ORDER_LINKED`, `REFUND_EXCEEDS_TOTAL`, `REFUND_FAILED`, `REFUND_LINE_ITEM_NOT_FOUND`, `REFUND_QUANTITY_EXCEEDS_ORDER`, `RESEND_FAILED`, `ORDER_ALREADY_CANCELLED`, `ORDER_ALREADY_FULFILLED`, `ORDER_CANNOT_CANCEL`, `CANCEL_FAILED`, `ADDRESS_UPDATE_REJECTED`, `EDIT_ADDRESS_FAILED`, `IDEMPOTENCY_KEY_CONFLICT`, `NO_GORGIAS_LINK`, `REPLY_FAILED`, `REDRIVE_FAILED`, `ALREADY_RETRIED`, `UNSUPPORTED_SOURCE`, `STORE_GONE`, `NOT_CONFIGURED`, `INTERNAL_SERVER_ERROR`.
+
+Integration outages fail fast instead of hanging: `503` with `{"error": "CIRCUIT_OPEN", "circuit": "shopify"}` (retry later), and a human-approved send that dies at Gorgias returns `502 REPLY_FAILED` + an alert — the ticket is never marked as delivered.
 
 ---
 
@@ -595,6 +616,8 @@ Error codes: `TICKET_NOT_FOUND`, `VALIDATION_ERROR`, `RATE_LIMIT_EXCEEDED`, `NO_
 | **PII Redaction** | Emails and phone numbers masked | Before any LLM call — never sent to external APIs |
 | **Prompt Injection Defense** | Code-level + prompt-level | Customer text labeled as untrusted data. Hard-coded gates (not prompt-based) for money-moving actions |
 | **Cost Circuit Breaker** | Daily cost cap auto-disables send | `DAILY_COST_CAP_USD` checked before every auto-send decision |
+| **Integration Circuit Breakers** | Upstream outage fails fast, never hangs | 5 consecutive transient failures open a breaker → `503 CIRCUIT_OPEN`; half-open trial call on recovery; state on `/health` |
+| **Webhook Dead-Letter Queue** | Failed events preserved, never silently lost | Crash mid-processing → payload stored in `dead_letters` + alert, caller gets 2xx; redrive is a human action (`POST /support/dead-letters/{id}/retry`) — the agent never fabricates a reply for a failed event |
 | **CORS** | Browser origin restriction | Set `ALLOWED_ORIGINS` to dashboard domain; empty = no browser access |
 | **Request ID Tracking** | Every request gets UUID `X-Request-ID` | Bound to structlog context — every log line includes it |
 | **No Information Leakage** | Global exception handler | Real error logged server-side; generic `500 Internal Server Error` returned to client |
@@ -632,7 +655,7 @@ npm run test:watch    # Watch mode
 npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-125 tests across 15 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar (including the store switcher), ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), the two action-approval panels (cancel, edit address, partial refund with line-item scoping), the subscription approval panel (including current-vs-proposed diffs per operation), the return-label approval panel (live carrier rates with cost shown before approval), the Stores page, and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
+129 tests across 15 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar (including the store switcher), ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), the two action-approval panels (cancel, edit address, partial refund with line-item scoping), the subscription approval panel (including current-vs-proposed diffs per operation), the return-label approval panel (live carrier rates with cost shown before approval), the Stores page (list, fleet-health chips, integration pills, sync states, create/delete), and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
 
 ### Eval Harness
 
@@ -863,9 +886,10 @@ cd dashboard && npm run dev                 # Dashboard
 | Subscription management (Recharge/Skio, human-approved operations) | High | Done |
 | Return labels (ShipEngine, policy eligibility + audit) | High | Done |
 | Multi-store registry + X-Store-Id data isolation + dashboard switcher | High | Done |
-| Circuit breakers for Shopify/Gorgias | Critical | Planned |
-| Conversation windowing (token budget) | Critical | Planned |
-| Dead-letter queue + Slack alerts | High | Planned |
+| Circuit breakers for Shopify/Gorgias/Recharge/Skio/ShipEngine | Critical | Done |
+| Conversation windowing (token budget) | Critical | Done |
+| Dead-letter queue + Slack alerts | High | Done |
+| Pilot metrics endpoint (auto-resolve / TTFR / edit rate) | High | Done |
 | Async webhook processing | High | Planned |
 | PostgreSQL migration path | Medium | Planned |
 | Multi-worker rate limiting (Redis) | Medium | Planned |

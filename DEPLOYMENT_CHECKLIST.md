@@ -46,6 +46,7 @@ The Blueprint will pre-fill all vars from `render.yaml`. **Every var marked `syn
 | `SKIO_API_TOKEN` | Skio dashboard → Integrations → API (alternative subscription provider) |
 | `SHIPENGINE_API_KEY` | https://app.shipengine.com → Settings → API Keys (return labels) |
 | `RETURN_ADDRESS_*` | Your return origin address — required to actually buy a return label |
+| `ALERT_WEBHOOK_URL` | Slack-compatible webhook URL — alerts on circuit opens, dead letters, cost-cap breaches |
 
 ### Pre-filled `sync: true` / `value:` Variables (auto-set by Blueprint):
 - `OPENROUTER_MODEL` = `openai/gpt-4o-mini`
@@ -59,6 +60,8 @@ The Blueprint will pre-fill all vars from `render.yaml`. **Every var marked `syn
 - `ALLOWED_ORIGINS` = `""`
 - `RATE_LIMIT_PER_MINUTE` = `60`
 - `REFUND_RATE_LIMIT_PER_MINUTE` = `10`
+- `MAX_HISTORY_MESSAGES` = `40`
+- `ALERT_WEBHOOK_URL` = `""` (paste a Slack webhook URL to enable alerts)
 - `PYTHON_VERSION` = `3.12.0`
 
 ---

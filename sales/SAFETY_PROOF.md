@@ -145,6 +145,17 @@ The agent can now propose three operational actions — **cancel an unfulfilled 
 
 ---
 
+## When infrastructure fails, safety holds
+
+The failure paths carry the same bias as the money paths — toward doing nothing:
+
+- **An upstream outage fails fast, never half-executes.** Shopify, Gorgias, Recharge, Skio and ShipEngine sit behind circuit breakers: five consecutive failures and calls return an immediate `503 CIRCUIT_OPEN` instead of retrying into a hang. A refund either starts against a healthy Shopify or never starts — there is no path where money moves partially because an integration was flaky.
+- **A failed webhook loses nothing and invents nothing.** If processing crashes, the exact payload is preserved as a dead letter, an alert fires, and the caller still gets a 2xx so Gorgias doesn't retry-storm us. Nothing is auto-sent for a failed event — recovery is a human clicking redrive (`POST /support/dead-letters/{id}/retry`), replayed in the correct store's database.
+- **A failed send never claims success.** If Gorgias rejects a human-approved reply, the API returns `502 REPLY_FAILED`, flips the ticket's auto-sent flag back to false so the dashboard never claims delivery, and fires an alert. You retry — you don't find out from the customer.
+- **Long conversations can't quietly break escalation.** The LLM prompt only sees the most recent `MAX_HISTORY_MESSAGES` messages (bounded token cost), but repeat-contact escalation counts the *entire* thread — a customer who has written in six times is escalated even when the model sees only the last few messages.
+
+---
+
 ## Full results available on request
 
 The four cases above are from the most recent full run of our suite: **15/15 passed (100%), with 100% correct classification** — including both adversarial prompt-injection cases. The suite now contains 30 golden cases, adding action-suggestion coverage (cancel before shipment, address typo, single-item refund, and a cancel request on an already-delivered order that must *not* propose a cancel), all five subscription operations, edge cases (oversized refund demand, already-cancelled order, address change after shipment), and a return-label case driven by eligibility fixtures. We re-run the full suite before every release and whenever a prompt changes.

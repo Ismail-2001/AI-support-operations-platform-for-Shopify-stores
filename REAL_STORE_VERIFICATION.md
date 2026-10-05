@@ -1,7 +1,7 @@
 # Real-Store Verification Runbook
 
 Manual verification of the money-touching actions against a **real Shopify store**.
-The automated suite (`pytest tests/`, 370 tests) proves the logic with fakes; this
+The automated suite (`pytest tests/`, 418 tests) proves the logic with fakes; this
 runbook proves the *integrations* with production APIs. Run it before trusting the
 agent with a paying client, and after any change to `integrations/` or the action
 endpoints.
@@ -145,6 +145,11 @@ curl -s "$BASE/support/tickets/$TID/return-rates"       -H "X-API-Key: $API_KEY"
 - Creating a ticket about refunds/cancellations must **not** auto-send: with
   `AUTO_SEND_ENABLED=true` and default `AUTO_SEND_BLOCKED_CATEGORIES`, the reply
   stays a draft for `refund`, `complaint`, `subscription` categories.
+- Circuit health is visible: `GET /health` includes `checks.circuits` with
+  `shopify`/`gorgias`/... in state `closed` on a healthy deployment.
+- Dead-letter redrive works: if a webhook is ever processed with a forced
+  failure, `GET /support/dead-letters` shows the payload and
+  `POST /support/dead-letters/{id}/retry` replays it to a normal 200.
 
 ---
 

@@ -143,10 +143,14 @@ services:
         value: "10"
       - key: INBOUND_WEBHOOK_SECRET
         sync: false
+      - key: ALERT_WEBHOOK_URL
+        sync: false
 
       # ── Cost governance ───────────────────────────────────
       - key: DAILY_COST_CAP_USD
         value: "5.0"
+      - key: MAX_HISTORY_MESSAGES
+        value: "40"
 
       # ── Python runtime (Render only, not in .env.example) ──
       - key: PYTHON_VERSION
