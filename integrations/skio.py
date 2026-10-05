@@ -78,9 +78,7 @@ class SkioClient:
         # ("" disables the client — no cross-tenant env fallback).
         if api_token is None:
             self.enabled = bool(settings.SKIO_API_TOKEN)
-            token = (
-                settings.SKIO_API_TOKEN.get_secret_value() if settings.SKIO_API_TOKEN else ""
-            )
+            token = settings.SKIO_API_TOKEN.get_secret_value() if settings.SKIO_API_TOKEN else ""
         else:
             token = str(api_token).strip()
             self.enabled = bool(token)

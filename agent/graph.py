@@ -261,9 +261,7 @@ def build_agent_graph(classifier, response_engine, shopify):
             # the model to ask for the order number; don't invent return state.
             return {"return_context": None, "return_used": False}
 
-        eligibility = evaluate_return_eligibility(
-            order, window_days=current_return_window_days()
-        )
+        eligibility = evaluate_return_eligibility(order, window_days=current_return_window_days())
         if not eligibility["eligible"]:
             return {
                 "return_context": (

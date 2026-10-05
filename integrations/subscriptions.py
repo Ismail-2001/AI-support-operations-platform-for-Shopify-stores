@@ -124,9 +124,7 @@ class SubscriptionService:
 
         scoped = self._store_scoped
         recharge = RechargeClient(
-            api_token=(
-                str(self._overrides.get("recharge_api_token") or "") if scoped else None
-            )
+            api_token=(str(self._overrides.get("recharge_api_token") or "") if scoped else None)
         )
         skio = SkioClient(
             api_token=str(self._overrides.get("skio_api_token") or "") if scoped else None
@@ -158,9 +156,7 @@ class SubscriptionService:
         scoped = self._store_scoped
         out = []
         if RechargeClient(
-            api_token=str(self._overrides.get("recharge_api_token") or "")
-            if scoped
-            else None
+            api_token=str(self._overrides.get("recharge_api_token") or "") if scoped else None
         ).enabled:
             out.append("recharge")
         if SkioClient(

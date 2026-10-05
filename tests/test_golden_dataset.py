@@ -66,7 +66,9 @@ def test_every_case_has_required_shape():
 
 def test_case_ids_are_unique():
     ids = [c["id"] for c in _cases()]
-    assert len(ids) == len(set(ids)), f"duplicate ids: {sorted({i for i in ids if ids.count(i) > 1})}"
+    assert len(ids) == len(
+        set(ids)
+    ), f"duplicate ids: {sorted({i for i in ids if ids.count(i) > 1})}"
 
 
 def test_expected_values_are_valid_enums():
@@ -93,9 +95,9 @@ def test_expected_values_are_valid_enums():
 def test_subscription_operations_have_a_context_fixture():
     for case in _cases():
         if case.get("expected_action_operation") is not None:
-            assert case.get("subscription_context"), (
-                f"{case['id']}: operation case without subscription_context fixture"
-            )
+            assert case.get(
+                "subscription_context"
+            ), f"{case['id']}: operation case without subscription_context fixture"
 
 
 def test_all_five_subscription_operations_are_covered():
@@ -120,7 +122,9 @@ def test_response_check_phrases_are_nonempty_strings():
         checks = case.get("response_checks", {})
         for key in ("must_not_contain", "must_contain_one_of"):
             for phrase in checks.get(key, []):
-                assert isinstance(phrase, str) and phrase.strip(), f"{case['id']}: empty {key} phrase"
+                assert (
+                    isinstance(phrase, str) and phrase.strip()
+                ), f"{case['id']}: empty {key} phrase"
 
 
 def _fake_classifier(category: str):
@@ -146,9 +150,7 @@ def _fake_engine(action_type: str, operation: str | None = None, response: str =
             suggested_response=response,
             suggested_action=SimpleNamespace(
                 type=SimpleNamespace(value=action_type),
-                subscription_operation=(
-                    SimpleNamespace(value=operation) if operation else None
-                ),
+                subscription_operation=(SimpleNamespace(value=operation) if operation else None),
             ),
         )
 
@@ -158,9 +160,7 @@ def _fake_engine(action_type: str, operation: str | None = None, response: str =
 def test_run_case_forwards_return_context_fixture():
     case = _case("return_label_damaged_item_suggests_action")
     engine, captured = _fake_engine("return_label")
-    result = asyncio.run(
-        run_case(case, _fake_classifier("returns"), engine)
-    )
+    result = asyncio.run(run_case(case, _fake_classifier("returns"), engine))
     assert captured.get("return_context") == case["return_context"]
     assert captured.get("subscription_context") is None
     assert result["passed"], result["failures"]
@@ -170,9 +170,7 @@ def test_run_case_forwards_return_context_fixture():
 def test_run_case_forwards_subscription_context_fixture():
     case = _case("subscription_cancel_request")
     engine, captured = _fake_engine("subscription_action", operation="cancel")
-    result = asyncio.run(
-        run_case(case, _fake_classifier("subscription"), engine)
-    )
+    result = asyncio.run(run_case(case, _fake_classifier("subscription"), engine))
     assert captured.get("subscription_context") == case["subscription_context"]
     assert captured.get("return_context") is None
     assert result["passed"], result["failures"]
