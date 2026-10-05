@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     # --- Generic inbound channel webhook (WhatsApp/chat-widget/etc via /webhooks/inbound) ---
     INBOUND_WEBHOOK_SECRET: str | None = None
 
+    # --- Operational alerting ---
+    # Optional Slack-compatible webhook URL. We POST {"text": ...} when a circuit
+    # opens, a webhook lands in the dead-letter queue, or the daily cost cap is
+    # exceeded. Empty = alerting is a no-op (every event still goes to logs).
+    ALERT_WEBHOOK_URL: str | None = None
+
     # --- Storefront chat widget (public /chat endpoints) ---
     # Publishable store key the embeddable widget sends to identify this install.
     # It is NOT a secret that guards money — it only lets a storefront open chat
@@ -131,6 +137,13 @@ class Settings(BaseSettings):
     # When today's LLM spend crosses this, auto-send is force-disabled (tickets still get
     # classified/drafted, just held for human review) until a human investigates. 0 = no cap.
     DAILY_COST_CAP_USD: float = 5.0
+
+    # --- Conversation history window ---
+    # How many of the MOST RECENT messages get loaded into the LLM prompt per graph
+    # run. Keeps token usage and latency flat on long-running tickets instead of
+    # growing without bound. 0 = unlimited (full history, previous behaviour).
+    # The operator transcript endpoints always return the full thread regardless.
+    MAX_HISTORY_MESSAGES: int = 40
 
     # --- Storage ---
     DB_PATH: str = "cs_agent.db"

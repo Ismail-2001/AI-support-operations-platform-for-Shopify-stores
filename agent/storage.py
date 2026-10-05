@@ -114,6 +114,21 @@ CREATE TABLE IF NOT EXISTS processed_webhook_events (
     PRIMARY KEY (event_id, source)
 );
 
+CREATE TABLE IF NOT EXISTS dead_letters (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL,             -- 'gorgias:ticket-created' | 'gorgias:message-created' | 'inbound'
+    payload TEXT NOT NULL,            -- JSON of the original webhook body, kept for redrive
+    store_id TEXT,                    -- store scope when it failed (NULL = default scope)
+    error TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',   -- pending | retried | failed
+    attempts INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_dead_letters_status ON dead_letters(status, created_at);
+
 CREATE TABLE IF NOT EXISTS traces (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ticket_id TEXT NOT NULL,
@@ -203,7 +218,7 @@ def storage_is_ephemeral(db_path: str | None = None) -> bool:
 
 class TicketStore:
     # Bump this when you add a migration. Each migration runs in order only once.
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
@@ -245,6 +260,7 @@ class TicketStore:
             2: self._migrate_v2,
             3: self._migrate_v3,
             4: self._migrate_v4,
+            5: self._migrate_v5,
         }
 
         for version in sorted(migrations.keys()):
@@ -308,6 +324,28 @@ class TicketStore:
                 error TEXT,
                 created_at TEXT NOT NULL
             )"""
+        )
+
+    async def _migrate_v5(self, db):
+        """v5: dead_letters — failed webhook payloads kept for operator redrive.
+        (Created by the _SCHEMA script on every boot; kept as an explicit version so
+        pre-existing DBs record that they passed this point.)"""
+        await db.execute(
+            """CREATE TABLE IF NOT EXISTS dead_letters (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                store_id TEXT,
+                error TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )"""
+        )
+        await db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_dead_letters_status ON dead_letters(status, created_at)"
         )
 
     async def save(
@@ -484,12 +522,25 @@ class TicketStore:
             created_at=now,
         )
 
-    async def get_messages(self, ticket_id: str) -> builtins.list[TicketMessage]:
+    async def get_messages(
+        self, ticket_id: str, limit: int | None = None
+    ) -> builtins.list[TicketMessage]:
+        """Full thread in chronological order. With `limit` (positive), only the
+        NEWEST `limit` messages — still chronological — so long-running tickets
+        don't feed an unbounded transcript to the LLM."""
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
-            cursor = await db.execute(
-                "SELECT * FROM messages WHERE ticket_id = ? ORDER BY id ASC", (ticket_id,)
-            )
+            if limit is not None and limit > 0:
+                cursor = await db.execute(
+                    "SELECT * FROM ("
+                    "SELECT * FROM messages WHERE ticket_id = ? ORDER BY id DESC LIMIT ?"
+                    ") ORDER BY id ASC",
+                    (ticket_id, limit),
+                )
+            else:
+                cursor = await db.execute(
+                    "SELECT * FROM messages WHERE ticket_id = ? ORDER BY id ASC", (ticket_id,)
+                )
             rows = await cursor.fetchall()
             return [
                 TicketMessage(
@@ -501,6 +552,18 @@ class TicketStore:
                 )
                 for r in rows
             ]
+
+    async def count_customer_messages(self, ticket_id: str) -> int:
+        """Customer-authored messages over the WHOLE thread — independent of any
+        history window, because escalation decisions (repeat contact) must see
+        every message, not just the ones in the prompt."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "SELECT COUNT(*) FROM messages WHERE ticket_id = ? AND sender_type = 'customer'",
+                (ticket_id,),
+            )
+            row = await cursor.fetchone()
+            return row[0]
 
     async def log_edit(
         self,
@@ -563,6 +626,83 @@ class TicketStore:
             "edited_before_send": edited,
             "overall_edit_rate": round(edited / total, 3) if total else None,
             "by_category": by_category,
+        }
+
+    async def get_pilot_metrics(self, since: str | None = None) -> dict[str, Any]:
+        """Headline pilot-review numbers in one call: auto-resolve rate, human edit
+        rate, time-to-first-response (TTFR), and LLM spend for the window.
+
+        `since` is an ISO timestamp (created_at strings compare lexically). TTFR is
+        the gap between a ticket's first customer message and its first agent/AI
+        reply; deltas are computed in Python and reported as both mean and median
+        (a single slow ticket drags the mean, the median shows the typical wait).
+        A reply before the first customer message (or unparseable timestamps) is
+        skipped, as are tickets never replied to — measured_tickets says how many
+        actually contributed."""
+        import statistics
+
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            where = "WHERE created_at >= ?" if since else ""
+            params: tuple = (since,) if since else ()
+
+            cursor = await db.execute(f"SELECT auto_sent FROM tickets {where}", params)
+            ticket_rows = await cursor.fetchall()
+            total = len(ticket_rows)
+            auto_sent = sum(r["auto_sent"] for r in ticket_rows)
+
+            cursor = await db.execute(f"SELECT was_edited FROM edit_records {where}", params)
+            edit_rows = await cursor.fetchall()
+            edits_total = len(edit_rows)
+            edits_changed = sum(r["was_edited"] for r in edit_rows)
+
+            msg_where = "WHERE created_at >= ?" if since else ""
+            cursor = await db.execute(
+                "SELECT MIN(CASE WHEN sender_type = 'customer' THEN created_at END) AS first_customer,"
+                "       MIN(CASE WHEN sender_type IN ('ai', 'agent') THEN created_at END) AS first_reply"
+                f" FROM messages {msg_where} GROUP BY ticket_id",
+                params,
+            )
+            ttfr_seconds: list[float] = []
+            for r in await cursor.fetchall():
+                if not r["first_customer"] or not r["first_reply"]:
+                    continue
+                try:
+                    t0 = datetime.fromisoformat(r["first_customer"])
+                    t1 = datetime.fromisoformat(r["first_reply"])
+                except ValueError:
+                    continue
+                delta = (t1 - t0).total_seconds()
+                if delta >= 0:
+                    ttfr_seconds.append(delta)
+
+            since_date = since[:10] if since else None
+            cost_where = "WHERE date >= ?" if since_date else ""
+            cursor = await db.execute(
+                f"SELECT COALESCE(SUM(cost_usd), 0) AS total FROM llm_costs {cost_where}",
+                (since_date,) if since_date else (),
+            )
+            llm_cost = float((await cursor.fetchone())["total"])
+
+        ttfr_seconds.sort()
+        return {
+            "since": since,
+            "tickets": {
+                "total": total,
+                "auto_sent": auto_sent,
+                "auto_resolve_rate": round(auto_sent / total, 3) if total else None,
+            },
+            "edits": {
+                "total_ai_drafts_sent": edits_total,
+                "edited_before_send": edits_changed,
+                "edit_rate": round(edits_changed / edits_total, 3) if edits_total else None,
+            },
+            "ttfr_seconds": {
+                "measured_tickets": len(ttfr_seconds),
+                "mean": round(statistics.fmean(ttfr_seconds), 1) if ttfr_seconds else None,
+                "median": round(statistics.median(ttfr_seconds), 1) if ttfr_seconds else None,
+            },
+            "llm_cost_usd": llm_cost,
         }
 
     async def get_refund_audit(self, idempotency_key: str) -> dict[str, Any] | None:
@@ -844,6 +984,73 @@ class TicketStore:
                 (event_id, source, now),
             )
             await db.commit()
+
+    # ── Dead letters: webhook payloads we failed to process, kept for redrive ──
+
+    async def record_dead_letter(
+        self,
+        source: str,
+        payload: dict[str, Any],
+        error: str,
+        store_id: str | None = None,
+    ) -> int:
+        """Persist a payload we could not process so an operator can inspect and redrive
+        it instead of silently losing the event. Returns the dead-letter row id."""
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT INTO dead_letters (source, payload, store_id, error, status,"
+                " attempts, created_at, updated_at) VALUES (?, ?, ?, ?, 'pending', 0, ?, ?)",
+                (source, json.dumps(payload, default=str), store_id, error, now, now),
+            )
+            await db.commit()
+            return cursor.lastrowid
+
+    async def list_dead_letters(
+        self, status: str | None = None, limit: int = 50
+    ) -> "list[dict[str, Any]]":
+        """Newest first. `status` filters by 'pending' | 'retried' | 'failed'."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            query = "SELECT * FROM dead_letters"
+            params: list[Any] = []
+            if status:
+                query += " WHERE status = ?"
+                params.append(status)
+            query += " ORDER BY id DESC LIMIT ?"
+            params.append(limit)
+            cursor = await db.execute(query, params)
+            rows = await cursor.fetchall()
+        return [dict(row) for row in rows]
+
+    async def get_dead_letter(self, dead_letter_id: int) -> dict[str, Any] | None:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM dead_letters WHERE id = ?", (dead_letter_id,))
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def mark_dead_letter(
+        self, dead_letter_id: int, status: str, error: str | None = None
+    ) -> bool:
+        """Update a dead letter after a redrive attempt ('retried' on success,
+        'failed' on another failure). Bumps the attempts counter. Returns whether
+        the row existed."""
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "UPDATE dead_letters SET status = ?, attempts = attempts + 1,"
+                " last_error = COALESCE(?, last_error), updated_at = ? WHERE id = ?",
+                (status, error, now, dead_letter_id),
+            )
+            await db.commit()
+            return cursor.rowcount > 0
+
+    async def count_pending_dead_letters(self) -> int:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT COUNT(*) FROM dead_letters WHERE status = 'pending'")
+            row = await cursor.fetchone()
+            return row[0]
 
     async def get_category_edit_stats(self) -> dict[str, Any]:
         """Per-category edit stats for auto-send calibration recommendations:

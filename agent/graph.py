@@ -82,10 +82,14 @@ def build_agent_graph(classifier, response_engine, shopify):
     # ── Node implementations ─────────────────────────────────────
 
     async def load_history(state: AgentState) -> dict[str, Any]:
+        from agent.config import settings
         from agent.storage import store
 
-        history = await store.get_messages(state["ticket"].id)
-        customer_message_count = sum(1 for m in history if m.sender_type.value == "customer")
+        # Windowed: only the most recent messages feed the LLM (token/latency
+        # stay flat on long tickets). The escalation count below deliberately
+        # uses the full thread — see count_customer_messages.
+        history = await store.get_messages(state["ticket"].id, limit=settings.MAX_HISTORY_MESSAGES)
+        customer_message_count = await store.count_customer_messages(state["ticket"].id)
         return {
             "history": history,
             "customer_message_count": customer_message_count,

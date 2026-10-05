@@ -3,14 +3,17 @@ Customer Support API Routes.
 Endpoints for ticket ingestion (manual + Gorgias webhook), suggestions, responses, analytics.
 """
 
+import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import structlog
 from fastapi import APIRouter, BackgroundTasks, Depends, Header, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 
+from agent.alerting import send_alert
 from agent.auth import check_shared_secret, verify_api_key
 from agent.config import settings
 from agent.context_proxy import ContextProxy
@@ -30,6 +33,7 @@ from agent.rate_limit import (
     rate_limit_refund,
     rate_limit_resend,
 )
+from agent.resilience import CircuitOpenError
 from agent.returns import evaluate_return_eligibility
 from agent.roi import compute_roi, get_roi_settings, save_roi_settings
 from agent.storage import storage_is_ephemeral, store
@@ -138,8 +142,20 @@ class ResponseRequest(BaseModel):
 
 @router.get("/whoami")
 async def whoami():
-    """Return which client's instance this is — run this before any destructive action
-    (especially refunds) to confirm you're hitting the right tenant."""
+    """Return which client's instance this is - run this before any destructive action
+    (especially refunds) to confirm you're hitting the right tenant. Inside an
+    X-Store-Id scope the answer is that STORE's identity, not the deployment's."""
+    from agent.multistore import get_store, get_store_id
+
+    store_id = get_store_id()
+    if store_id:
+        rec = await get_store(store_id)
+        return {
+            "store_id": store_id,
+            "tenant_name": rec["name"] if rec else store_id,
+            "shopify_domain": rec["shop_domain"] if rec else "",
+            "gorgias_domain": settings.GORGIAS_DOMAIN,
+        }
     return {
         "tenant_name": settings.TENANT_NAME,
         "shopify_domain": settings.SHOPIFY_SHOP_DOMAIN,
@@ -282,7 +298,9 @@ async def respond_to_ticket(ticket_id: str, req: ResponseRequest):
     if not row:
         raise_not_found("ticket", ticket_id)
 
-    gorgias_ticket_id = row["ticket"].get("gorgias_ticket_id")
+    gorgias_ticket_id = row["ticket"].get("gorgias_ticket_id") or (
+        (row["ticket"].get("metadata") or {}).get("gorgias_ticket_id")
+    )
     if req.send_via_gorgias:
         if not gorgias_ticket_id:
             raise APIError(
@@ -294,6 +312,22 @@ async def respond_to_ticket(ticket_id: str, req: ResponseRequest):
             await _gorgias.post_reply(gorgias_ticket_id, req.response)
         except GorgiasNotConfigured:
             raise_not_configured("Gorgias")
+        except CircuitOpenError:
+            # The global handler maps this to 503 CIRCUIT_OPEN — a known, retryable
+            # state, not a surprise failure worth paging anyone about.
+            raise
+        except Exception as exc:
+            await send_alert(
+                title="Reply failed to send",
+                message=f"Ticket {ticket_id}: {type(exc).__name__}: {exc}",
+                severity="error",
+                dedupe_key="respond_failed",
+            )
+            raise APIError(
+                code="REPLY_FAILED",
+                message=f"Gorgias send failed: {exc}",
+                status=502,
+            ) from exc
 
     # Self-improvement tracking: if this ticket had an AI draft, compare it to what was
     # actually sent. High edit rates on a category are the signal to improve that prompt
@@ -1524,7 +1558,11 @@ async def sync_knowledge_from_shopify(
         raise_not_configured("Shopify")
     if not start_sync(force=force):
         return {"status": "running"}
-    background_tasks.add_task(run_sync, force)
+    # Capture the scope now: the background task must keep operating on THIS
+    # store's KB/status even if it runs after the request context is reset.
+    from agent.multistore import get_store_id
+
+    background_tasks.add_task(run_sync, force, get_store_id())
     return {"status": "started", "force": force}
 
 
@@ -1599,20 +1637,44 @@ class InboundMessageRequest(BaseModel):
         return v.strip()
 
 
-@webhook_router.post("/webhooks/inbound")
-async def generic_inbound_message(
-    req: InboundMessageRequest, x_webhook_secret: str | None = Header(None)
-):
-    """One endpoint for any channel that isn't Gorgias — a website chat widget, a WhatsApp
-    number via Twilio/Meta Cloud API, an Instagram DM bridge, etc. Pass the same `thread_id`
-    (e.g. the customer's phone number or session id) on every message from the same
-    conversation so it's treated as one thread instead of a new ticket each time.
+async def _record_dead_letter(
+    source: str, payload: dict[str, Any], exc: Exception, store_id: str | None = None
+) -> None:
+    """Persist a failed webhook payload for operator redrive and push an alert.
 
-    Set INBOUND_WEBHOOK_SECRET in .env and have whatever's calling this send the same value
-    in an X-Webhook-Secret header — this endpoint has no API key, so the secret is the only
-    guard against random internet traffic hitting it."""
-    check_shared_secret(x_webhook_secret, settings.INBOUND_WEBHOOK_SECRET, "inbound webhook")
+    Never raises: if the DLQ write itself fails we still owe the caller a 2xx
+    (a 5xx would make Gorgias retry-storm us — exactly what the DLQ prevents)."""
+    from agent.multistore import get_store_id
 
+    scope = store_id if store_id is not None else get_store_id()
+    error = f"{type(exc).__name__}: {exc}"
+    try:
+        dl_id = await store.record_dead_letter(
+            source=source, payload=payload, error=error, store_id=scope
+        )
+        logger.error(
+            "webhook_dead_letter_recorded",
+            source=source,
+            dead_letter_id=dl_id,
+            store_id=scope,
+            error=error,
+        )
+    except Exception as record_exc:
+        logger.error("webhook_dead_letter_record_failed", source=source, error=str(record_exc))
+    await send_alert(
+        title=f"Webhook failed: {source}",
+        message=(
+            f"{error}\n\nPayload preserved — inspect via GET /support/dead-letters "
+            "and redrive via POST /support/dead-letters/{id}/retry."
+        ),
+        severity="error",
+        dedupe_key=f"dead_letter:{source}",
+    )
+
+
+async def _process_inbound(req: InboundMessageRequest) -> dict[str, Any]:
+    """Process one inbound-channel message. Split out of the webhook handler so
+    the dead-letter redrive endpoint can replay a failed payload verbatim."""
     if req.thread_id:
         existing = await store.get(f"inbound_{req.thread_id}")
         if existing:
@@ -1640,6 +1702,34 @@ async def generic_inbound_message(
     }
 
 
+@webhook_router.post("/webhooks/inbound")
+async def generic_inbound_message(
+    req: InboundMessageRequest, x_webhook_secret: str | None = Header(None)
+):
+    """One endpoint for any channel that isn't Gorgias — a website chat widget, a WhatsApp
+    number via Twilio/Meta Cloud API, an Instagram DM bridge, etc. Pass the same `thread_id`
+    (e.g. the customer's phone number or session id) on every message from the same
+    conversation so it's treated as one thread instead of a new ticket each time.
+
+    Set INBOUND_WEBHOOK_SECRET in .env and have whatever's calling this send the same value
+    in an X-Webhook-Secret header — this endpoint has no API key, so the secret is the only
+    guard against random internet traffic hitting it.
+
+    Processing failures return 200 with the payload preserved in the dead-letter
+    queue (GET /support/dead-letters) rather than a 5xx: the channel would just
+    retry-storm us, and the operator gets an alert instead."""
+    check_shared_secret(x_webhook_secret, settings.INBOUND_WEBHOOK_SECRET, "inbound webhook")
+
+    try:
+        return await _process_inbound(req)
+    except Exception as exc:
+        await _record_dead_letter("inbound", req.model_dump(mode="json"), exc)
+        return JSONResponse(
+            status_code=200,
+            content={"received": True, "queued": True, "error": str(exc)[:300]},
+        )
+
+
 # ── Gorgias Inbound Webhook ─────────────────────────────────
 
 
@@ -1655,16 +1745,23 @@ def _extract_event_id(payload: dict[str, Any]) -> str | None:
     return event_id
 
 
-@webhook_router.post("/webhooks/gorgias/ticket-created")
-async def gorgias_ticket_created_webhook(
-    request: Request, x_webhook_secret: str | None = Header(None)
-):
-    """Point Gorgias's 'ticket-created' event webhook at this endpoint.
-    Set GORGIAS_WEBHOOK_SECRET and configure the same value as a custom header in Gorgias's
-    webhook settings — Gorgias doesn't sign payloads, so a shared secret is the guard here."""
-    check_shared_secret(x_webhook_secret, settings.GORGIAS_WEBHOOK_SECRET, "Gorgias webhook")
+def _gorgias_webhook_secret() -> str | None:
+    """Webhook shared secret for the active scope.
 
-    payload = await request.json()
+    Store scope: ONLY that store's own secret (a tenant that hasn't set one
+    gets the standard 'not configured' hard-fail in production - never another
+    tenant's secret). Default scope: GORGIAS_WEBHOOK_SECRET from .env."""
+    from agent.multistore import integration_overrides
+
+    overrides = integration_overrides()
+    if overrides is not None:
+        return overrides.get("gorgias_webhook_secret") or None
+    return settings.GORGIAS_WEBHOOK_SECRET
+
+
+async def _process_gorgias_ticket_created(payload: dict[str, Any]) -> dict[str, Any]:
+    """Dedupe, normalize, classify, dispatch. Split out of the webhook handler so
+    the dead-letter redrive endpoint can replay a failed payload verbatim."""
     event_id = _extract_event_id(payload)
     if event_id:
         existing = await store.get_processed_webhook_event(event_id, "gorgias")
@@ -1683,16 +1780,36 @@ async def gorgias_ticket_created_webhook(
     return {"received": True, "ticket_id": ticket.id, "auto_sent": decision.auto_sent}
 
 
-@webhook_router.post("/webhooks/gorgias/message-created")
-async def gorgias_message_created_webhook(
-    request: Request, x_webhook_secret: str | None = Header(None)
+@webhook_router.post("/webhooks/gorgias/ticket-created")
+@webhook_router.post("/webhooks/gorgias/{store_id}/ticket-created")
+async def gorgias_ticket_created_webhook(
+    request: Request, x_webhook_secret: str | None = Header(None), store_id: str | None = None
 ):
-    """Point Gorgias's 'message-created' event webhook at this endpoint (separate webhook in
-    Gorgias's settings from ticket-created). Handles follow-up customer messages on tickets we've
-    already seen — appends to the same thread instead of creating a duplicate ticket."""
-    check_shared_secret(x_webhook_secret, settings.GORGIAS_WEBHOOK_SECRET, "Gorgias webhook")
+    """Point Gorgias's 'ticket-created' event webhook at this endpoint.
+    Set GORGIAS_WEBHOOK_SECRET and configure the same value as a custom header in Gorgias's
+    webhook settings — Gorgias doesn't sign payloads, so a shared secret is the guard here.
+
+    Multi-store: each tenant configures /support/webhooks/gorgias/<store_id>/ticket-created
+    (the middleware scopes the request to that store; `store_id` here is informational).
+
+    Processing failures return 200 with the payload preserved in the dead-letter
+    queue (GET /support/dead-letters) rather than a 5xx — see _record_dead_letter."""
+    check_shared_secret(x_webhook_secret, _gorgias_webhook_secret(), "Gorgias webhook")
 
     payload = await request.json()
+    try:
+        return await _process_gorgias_ticket_created(payload)
+    except Exception as exc:
+        await _record_dead_letter("gorgias:ticket-created", payload, exc, store_id=store_id)
+        return JSONResponse(
+            status_code=200,
+            content={"received": True, "queued": True, "error": str(exc)[:300]},
+        )
+
+
+async def _process_gorgias_message_created(payload: dict[str, Any]) -> dict[str, Any]:
+    """Follow-up path for tickets we've already seen. Split out of the webhook
+    handler so the dead-letter redrive endpoint can replay a failed payload."""
     event_id = _extract_event_id(payload)
     if event_id:
         existing = await store.get_processed_webhook_event(event_id, "gorgias")
@@ -1729,6 +1846,29 @@ async def gorgias_message_created_webhook(
     }
 
 
+@webhook_router.post("/webhooks/gorgias/message-created")
+@webhook_router.post("/webhooks/gorgias/{store_id}/message-created")
+async def gorgias_message_created_webhook(
+    request: Request, x_webhook_secret: str | None = Header(None), store_id: str | None = None
+):
+    """Point Gorgias's 'message-created' event webhook at this endpoint (separate webhook in
+    Gorgias's settings from ticket-created). Handles follow-up customer messages on tickets we've
+    already seen — appends to the same thread instead of creating a duplicate ticket.
+    Multi-store variant: /support/webhooks/gorgias/<store_id>/message-created.
+    Failures go to the dead-letter queue with a 200 — see _record_dead_letter."""
+    check_shared_secret(x_webhook_secret, _gorgias_webhook_secret(), "Gorgias webhook")
+
+    payload = await request.json()
+    try:
+        return await _process_gorgias_message_created(payload)
+    except Exception as exc:
+        await _record_dead_letter("gorgias:message-created", payload, exc, store_id=store_id)
+        return JSONResponse(
+            status_code=200,
+            content={"received": True, "queued": True, "error": str(exc)[:300]},
+        )
+
+
 async def _dispatch_gorgias_reply(gorgias_ticket_id: str | None, decision, ticket_id: str) -> None:
     """High-confidence + policy-clear -> send straight back to the customer via Gorgias.
     Everything else -> attach as an internal note so a human sees the draft in Gorgias itself.
@@ -1755,10 +1895,113 @@ async def _dispatch_gorgias_reply(gorgias_ticket_id: str | None, decision, ticke
             gorgias_ticket_id=gorgias_ticket_id,
             error=str(e),
         )
+        await send_alert(
+            title="Gorgias dispatch failed",
+            message=(
+                f"Ticket {ticket_id}: {type(e).__name__}: {e} — "
+                + (
+                    "auto-sent reply was NOT delivered to the customer."
+                    if decision.auto_sent
+                    else "internal note was NOT attached."
+                )
+            ),
+            severity="error",
+            dedupe_key="gorgias_dispatch_failed",
+        )
         if decision.auto_sent:
             # The reply was supposed to go to the customer but Gorgias failed.
             # Flip auto_sent to False so the ticket doesn't falsely claim delivery.
             await store.update_status(ticket_id, auto_sent=False)
+
+
+# ── Dead letters: inspect + redrive failed webhook payloads ──
+
+# Sources the redrive endpoint knows how to replay. Functions are referenced by
+# name (not evaluated) so the processors above can be defined in any order.
+_REPLAY_SOURCES: dict[str, Any] = {
+    "gorgias:ticket-created": _process_gorgias_ticket_created,
+    "gorgias:message-created": _process_gorgias_message_created,
+    "inbound": _process_inbound,
+}
+
+
+@router.get("/dead-letters")
+async def list_dead_letters(
+    status: str | None = Query(None, pattern="^(pending|retried|failed)$"),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Webhook payloads that failed processing, newest first. `pending` rows are
+    un-retried; each redrive marks the row `retried` (success) or `failed` (another
+    failure, attempts counter bumped). Store-scoped requests list that store's queue."""
+    rows = await store.list_dead_letters(status=status, limit=limit)
+    return {
+        "dead_letters": rows,
+        "pending": await store.count_pending_dead_letters(),
+    }
+
+
+@router.post("/dead-letters/{dead_letter_id}/retry")
+async def retry_dead_letter(dead_letter_id: int):
+    """Replay a dead-lettered payload through the same processor the webhook uses.
+
+    Runs in the store scope the payload failed in (per the row's store_id), so the
+    ticket lands in the right tenant DB. Failures mark the row `failed` and return
+    502 REDRIVE_FAILED — the payload stays available for another attempt."""
+    row = await store.get_dead_letter(dead_letter_id)
+    if not row:
+        raise_not_found("dead_letter", dead_letter_id)
+    if row["status"] == "retried":
+        raise APIError(
+            code="ALREADY_RETRIED",
+            message=f"Dead letter {dead_letter_id} was already redriven successfully",
+            status=409,
+        )
+    handler = _REPLAY_SOURCES.get(row["source"])
+    if handler is None:
+        raise APIError(
+            code="UNSUPPORTED_SOURCE",
+            message=f"No replayer registered for source {row['source']!r}",
+            status=422,
+        )
+
+    payload = json.loads(row["payload"])
+
+    # Enter the store scope this payload failed in, if it differs from the current one.
+    from agent.multistore import StoreNotFound, current_store_id, ensure_store_ready, get_store_id
+
+    token = None
+    scope = row.get("store_id")
+    if scope and scope != get_store_id():
+        try:
+            await ensure_store_ready(scope)
+        except StoreNotFound:
+            raise APIError(
+                code="STORE_GONE",
+                message=(
+                    f"Dead letter belongs to store {scope!r}, which no longer exists — "
+                    "it cannot be replayed in its original scope"
+                ),
+                status=409,
+            ) from None
+        token = current_store_id.set(scope)
+
+    try:
+        if row["source"] == "inbound":
+            result = await handler(InboundMessageRequest(**payload))
+        else:
+            result = await handler(payload)
+        await store.mark_dead_letter(dead_letter_id, "retried")
+        return {"dead_letter_id": dead_letter_id, "status": "retried", "result": result}
+    except Exception as exc:
+        await store.mark_dead_letter(dead_letter_id, "failed", error=f"{type(exc).__name__}: {exc}")
+        raise APIError(
+            code="REDRIVE_FAILED",
+            message=f"Redrive failed: {type(exc).__name__}: {exc}",
+            status=502,
+        ) from exc
+    finally:
+        if token is not None:
+            current_store_id.reset(token)
 
 
 # ── Analytics ──────────────────────────────────────────────
@@ -1777,6 +2020,19 @@ async def get_support_analytics(days: int = Query(7, ge=1, le=90)):
         channel_breakdown=agg["channel_breakdown"],
         sentiment_distribution=agg["sentiment_distribution"],
     )
+
+
+@router.get("/analytics/pilot")
+async def get_pilot_report(days: str = Query("7", pattern=r"^(all|[1-9]\d{0,3})$")):
+    """The numbers a pilot review runs on, in one call: auto-resolve %, human edit
+    rate, time-to-first-response (mean + median), and LLM spend for the window.
+    `days` = 7 | 30 | a number of days | all. ROI estimates (owner-adjustable
+    assumptions) live at /support/analytics/roi; per-category breakdowns at
+    /support/analytics/quality."""
+    since = None if days == "all" else (datetime.now(UTC) - timedelta(days=int(days))).isoformat()
+    metrics = await store.get_pilot_metrics(since)
+    metrics["window_days"] = days
+    return metrics
 
 
 # ── Health ─────────────────────────────────────────────────
@@ -1979,12 +2235,15 @@ async def get_ticket_trace(ticket_id: str):
 
 @public_router.get("/health")
 async def customer_support_health():
+    from agent.resilience import circuit_snapshots
+
     return {
         "status": "healthy",
         "shopify_connected": _agent.shopify.enabled,
         "gorgias_connected": _gorgias.enabled,
         "auto_send_enabled": settings.AUTO_SEND_ENABLED,
         "storage_persistent": not storage_is_ephemeral(),
+        "circuits": circuit_snapshots(),
         "timestamp": datetime.now(UTC).isoformat(),
     }
 
@@ -2005,6 +2264,11 @@ class StoreCreateRequest(BaseModel):
     subscription_provider: str | None = None  # "auto" | "recharge" | "skio"
     return_address: dict[str, str] | None = None
     return_window_days: int | None = Field(default=None, ge=0, le=365)  # 0 = use global
+    # Per-store Gorgias helpdesk (agency tenants each bring their own desk).
+    gorgias_domain: str | None = None
+    gorgias_email: str | None = None
+    gorgias_api_key: str | None = None
+    gorgias_webhook_secret: str | None = None
 
     @field_validator("shop_domain")
     @classmethod
@@ -2048,6 +2312,10 @@ class StoreUpdateRequest(BaseModel):
     subscription_provider: str | None = None
     return_address: dict[str, str] | None = None
     return_window_days: int | None = Field(default=None, ge=0, le=365)
+    gorgias_domain: str | None = None
+    gorgias_email: str | None = None
+    gorgias_api_key: str | None = None
+    gorgias_webhook_secret: str | None = None
 
     @field_validator("shop_domain")
     @classmethod
@@ -2096,7 +2364,15 @@ def _integration_credentials(
     """Merge patch for per-store integration settings. None on a field = leave
     unchanged; "" / {} / 0 = clear (fall back to process env / global default)."""
     out: dict[str, str | int | dict | None] = {}
-    for field in ("shipengine_api_key", "recharge_api_token", "skio_api_token"):
+    for field in (
+        "shipengine_api_key",
+        "recharge_api_token",
+        "skio_api_token",
+        "gorgias_domain",
+        "gorgias_email",
+        "gorgias_api_key",
+        "gorgias_webhook_secret",
+    ):
         value = getattr(req, field)
         if value is not None:
             out[field] = value.strip() or None
@@ -2115,6 +2391,62 @@ async def list_stores_endpoint():
     from agent.multistore import list_stores, public_store
 
     return {"stores": [public_store(r) for r in await list_stores()]}
+
+
+@router.get("/stores/summary")
+async def stores_summary_endpoint():
+    """Fleet health for the Stores page in one call: how many stores are connected
+    to each integration, plus each store's integration flags and product-sync
+    state. Registered BEFORE /stores/{store_id} so 'summary' isn't captured as an id."""
+    from agent.multistore import list_stores, public_store
+    from agent.product_sync import get_sync_status
+
+    records = await list_stores()
+    stores_out: list[dict[str, Any]] = []
+    counts = {"total": 0, "shopify": 0, "gorgias": 0, "shipengine": 0, "subscriptions": 0}
+    sync_running = 0
+
+    for rec in records:
+        pub = public_store(rec)
+        integrations = {
+            "shopify": bool(pub.get("has_shopify_token")),
+            "gorgias": bool(pub.get("has_gorgias_token")),
+            "shipengine": bool(pub.get("has_shipengine_token")),
+            "recharge": bool(pub.get("has_recharge_token")),
+            "skio": bool(pub.get("has_skio_token")),
+        }
+        sync = get_sync_status(scope=rec["id"])
+        sync_status = sync.get("status") or "idle"
+        if sync_status in ("scheduled", "running"):
+            sync_running += 1
+
+        counts["total"] += 1
+        counts["shopify"] += int(integrations["shopify"])
+        counts["gorgias"] += int(integrations["gorgias"])
+        counts["shipengine"] += int(integrations["shipengine"])
+        counts["subscriptions"] += int(
+            integrations["recharge"]
+            or integrations["skio"]
+            or bool(pub.get("subscription_provider"))
+        )
+
+        stores_out.append(
+            {
+                "id": pub["id"],
+                "name": pub["name"],
+                "shop_domain": pub.get("shop_domain"),
+                "integrations": integrations,
+                "subscription_provider": pub.get("subscription_provider"),
+                "sync": {
+                    "status": sync_status,
+                    "last_sync_at": sync.get("finished_at") or sync.get("started_at"),
+                    "products_seen": sync.get("products_seen", 0),
+                    "error": sync.get("error"),
+                },
+            }
+        )
+
+    return {"counts": counts, "sync_running": sync_running, "stores": stores_out}
 
 
 @router.post("/stores", status_code=201)
