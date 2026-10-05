@@ -5,6 +5,7 @@ middleware, data isolation between stores' DB files, per-store agent
 credentials, and ContextProxy semantics.
 """
 
+import asyncio
 import importlib
 from pathlib import Path
 
@@ -24,8 +25,12 @@ AUTH = {"X-API-Key": "test-key-123"}
 @pytest.fixture(autouse=True)
 def _clean_multistore_caches():
     multistore.reset_caches()
+    from agent.product_sync import reset_sync_state
+
+    reset_sync_state()
     yield
     multistore.reset_caches()
+    reset_sync_state()
 
 
 @pytest.fixture
@@ -431,6 +436,64 @@ def test_store_integration_settings_validation(client):
     assert r3.status_code == 422
 
 
+def test_stores_summary_counts_integrations_and_sync(client):
+    """GET /support/stores/summary: fleet counts, per-store integration flags and
+    sync state, no secrets echoed — and 'summary' must not be swallowed by the
+    /stores/{store_id} route."""
+    c, _cs = client
+    _create_store(c, "Bare", domain="bare.myshopify.com")
+    full = _create_store(c, "Full", domain="full.myshopify.com", token="shpat_full")
+    patched = c.patch(
+        f"/support/stores/{full['id']}",
+        headers=AUTH,
+        json={
+            "gorgias_domain": "full",
+            "gorgias_email": "ops@full.test",
+            "gorgias_api_key": "ga_secret_value",
+            "gorgias_webhook_secret": "gw_secret_value",
+            "recharge_api_token": "rc_secret_value",
+        },
+    )
+    assert patched.status_code == 200, patched.text
+
+    s = c.get("/support/stores/summary", headers=AUTH)
+    assert s.status_code == 200, s.text
+    body = s.json()
+    assert body["counts"] == {
+        "total": 2,
+        "shopify": 1,
+        "gorgias": 1,
+        "shipengine": 0,
+        "subscriptions": 1,
+    }
+    assert body["sync_running"] == 0
+
+    by_id = {st["id"]: st for st in body["stores"]}
+    full_entry = by_id[full["id"]]
+    assert full_entry["integrations"] == {
+        "shopify": True,
+        "gorgias": True,
+        "shipengine": False,
+        "recharge": True,
+        "skio": False,
+    }
+    assert full_entry["subscription_provider"] is None
+    assert full_entry["sync"]["status"] == "idle"
+    assert by_id is not None
+
+    # Secrets never appear in the summary, same redaction promise as the registry.
+    for secret in ("ga_secret_value", "gw_secret_value", "rc_secret_value", "shpat_full"):
+        assert secret not in s.text
+
+    # A running sync shows up as fleet health.
+    from agent.product_sync import start_sync
+
+    assert start_sync(scope=full["id"]) is True
+    body2 = c.get("/support/stores/summary", headers=AUTH).json()
+    assert body2["sync_running"] == 1
+    assert {st["id"]: st for st in body2["stores"]}[full["id"]]["sync"]["status"] == "scheduled"
+
+
 def test_integration_overrides_none_outside_store_scope():
     from agent.multistore import integration_overrides
 
@@ -569,3 +632,332 @@ def test_per_store_return_window_applies_through_endpoint(client):
     # The same order under the deployment default (30 days) would be eligible.
     default = c.get(f"/support/tickets/{ticket_id}/return-eligibility", headers=AUTH)
     assert default.status_code == 404  # ticket lives in the store's DB, not primary
+
+
+# --- WP1: settings / credentials / sync-state isolation ---
+
+
+def _run_in_store(store_id, coro_factory):
+    """Run an async callable inside a warmed store scope, then restore context."""
+    import asyncio
+
+    async def runner():
+        await multistore.ensure_store_ready(store_id)
+        token = multistore.current_store_id.set(store_id)
+        try:
+            return await coro_factory()
+        finally:
+            multistore.current_store_id.reset(token)
+
+    return asyncio.run(runner())
+
+
+def test_brand_voice_isolated_per_store(client):
+    """app_settings KV (voice, widget, ROI, wizard flags) resolves to the
+    active store's DB file - not the primary one."""
+    import asyncio
+    import sqlite3
+
+    from agent import setup_store
+
+    c, _cs = client
+    sid = _create_store(c, "Voice Tenant")["id"]
+
+    # Default scope writes to the primary DB.
+    asyncio.run(setup_store.set_voice({"store_name": "Default Co", "sign_off": "- Team"}))
+    # Store scope writes to cs_store_<id>.db.
+    voice = _run_in_store(sid, lambda: setup_store.set_voice({"store_name": "Voice Tenant"}))
+    assert voice["store_name"] == "Voice Tenant"
+
+    # Reads are scoped the same way.
+    assert asyncio.run(setup_store.get_voice())["store_name"] == "Default Co"
+    scoped = _run_in_store(sid, setup_store.get_voice)
+    assert scoped["store_name"] == "Voice Tenant"
+    assert scoped["sign_off"] == ""  # defaulted - never inherited from default scope
+
+    # Physical proof: the row lives in the store file, not the primary file.
+    conn = sqlite3.connect(multistore.store_db_path(sid))
+    try:
+        row = conn.execute(
+            "SELECT value FROM app_settings WHERE key = ?", (setup_store.VOICE_KEY,)
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None and "Voice Tenant" in row[0]
+
+
+def test_shopify_credentials_never_fall_back_to_env(client, monkeypatch):
+    """A registered store with no/blank token is DISABLED even when the
+    deployment env holds a valid Shopify token."""
+    c, _cs = client
+    monkeypatch.setattr(settings, "SHOPIFY_ACCESS_TOKEN", SecretStr("env-secret-token"))
+    monkeypatch.setattr(settings, "SHOPIFY_SHOP_DOMAIN", "env-tenant.myshopify.com")
+
+    sid = _create_store(c, "No Token Store", domain="notoken.myshopify.com")["id"]
+    rec = _run_in_store(sid, lambda: multistore.ensure_store_ready(sid))
+    agent = multistore._agents[sid]
+    assert agent.shopify.enabled is False
+    assert rec["credentials"].get("shopify_access_token") is None
+
+    # Store WITH its own token uses it, not the env one.
+    sid2 = _create_store(c, "Token Store", domain="owned.myshopify.com", token="store-token")["id"]
+    _run_in_store(sid2, lambda: multistore.ensure_store_ready(sid2))
+    agent2 = multistore._agents[sid2]
+    assert agent2.shopify.enabled is True
+    assert agent2.shopify.shop_domain == "owned.myshopify.com"
+    assert agent2.shopify.headers["X-Shopify-Access-Token"] == "store-token"
+
+    # Default (no store scope) keeps env behavior - single-store unaffected.
+    from integrations.shopify import ShopifyClient
+
+    default_client = ShopifyClient()
+    assert default_client.enabled is True
+    assert default_client.shop_domain == "env-tenant.myshopify.com"
+
+
+def test_kb_sync_state_isolated_per_store(client):
+    from agent import product_sync
+
+    c, _cs = client
+    a = _create_store(c, "Sync A")["id"]
+    b = _create_store(c, "Sync B")["id"]
+
+    assert product_sync.start_sync(scope=a) is True
+    # Store B is not blocked by A's in-flight sync, and the default can run too.
+    assert product_sync.start_sync(scope=b) is True
+    assert product_sync.start_sync() is True
+    # Each scope has its own single-flight slot.
+    assert product_sync.start_sync(scope=a) is False
+
+    assert product_sync.get_sync_status(scope=a)["status"] == "scheduled"
+    assert product_sync.get_sync_status(scope=b)["status"] == "scheduled"
+    assert product_sync.get_sync_status()["status"] == "scheduled"
+
+    # Ending A's sync leaves B and the default untouched.
+    product_sync._state_for(a).update(status="idle")
+    assert product_sync.get_sync_status(scope=b)["status"] == "scheduled"
+    assert product_sync.get_sync_status(scope=a)["status"] == "idle"
+
+    # Deleting a store clears its sync state bucket.
+    c.delete(f"/support/stores/{b}", headers=AUTH)
+    assert b not in product_sync._store_states
+
+
+def test_whoami_is_store_scoped(client):
+    c, _cs = client
+    sid = _create_store(c, "Acme Agency Client", domain="acme.myshopify.com")["id"]
+
+    scoped = c.get("/support/whoami", headers={**AUTH, "X-Store-Id": sid})
+    assert scoped.status_code == 200
+    body = scoped.json()
+    assert body["store_id"] == sid
+    assert body["tenant_name"] == "Acme Agency Client"
+    assert body["shopify_domain"] == "acme.myshopify.com"
+
+    default = c.get("/support/whoami", headers=AUTH)
+    assert default.status_code == 200
+    assert "store_id" not in default.json()
+    assert default.json()["tenant_name"] == settings.TENANT_NAME
+
+
+def test_setup_voice_endpoint_writes_per_store(client):
+    """HTTP chain: PUT /support/setup/voice with X-Store-Id lands in the store
+    file and is invisible to the default scope."""
+    c, _cs = client
+    sid = _create_store(c, "Wizard Tenant")["id"]
+    hdrs = {**AUTH, "X-Store-Id": sid}
+
+    r = c.put("/support/setup/voice", headers=hdrs, json={"store_name": "Wizard Co"})
+    assert r.status_code == 200, r.text
+    assert r.json()["voice"]["store_name"] == "Wizard Co"
+
+    default = c.get("/support/setup", headers=AUTH)
+    assert default.status_code == 200
+    assert default.json()["voice"]["store_name"] == ""
+
+    scoped = c.get("/support/setup", headers=hdrs)
+    assert scoped.json()["voice"]["store_name"] == "Wizard Co"
+
+
+# --- WP2: widget key -> store routing, per-store Gorgias ---
+
+
+def test_widget_key_routes_chat_to_owning_store(client):
+    """A storefront sends only its publishable key; the middleware resolves it
+    to the owning store so chat config/tickets land in THAT store's context."""
+    c, _cs = client
+    sid = _create_store(c, "Widget Tenant")["id"]
+    hdrs = {**AUTH, "X-Store-Id": sid}
+
+    # Operator customizes the store's widget appearance.
+    r = c.put("/support/widget", headers=hdrs, json={"title": "Acme Support"})
+    assert r.status_code == 200, r.text
+    store_key = c.get("/support/widget", headers=hdrs).json()["key"]
+    assert store_key
+
+    # Public chat config with ONLY the widget key -> store's own config,
+    # no X-Store-Id header anywhere.
+    resp = c.get("/chat/config", params={"key": store_key})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["title"] == "Acme Support"
+
+    # The default scope keeps its own key + config (widget config is isolated).
+    default_key = c.get("/support/widget", headers=AUTH).json()["key"]
+    assert default_key != store_key
+    default_cfg = c.get("/chat/config", params={"key": default_key})
+    assert default_cfg.status_code == 200
+    assert default_cfg.json()["title"] != "Acme Support"
+
+    # Unknown key -> 401 (and no accidental store context).
+    assert c.get("/chat/config", params={"key": "not-a-real-key"}).status_code == 401
+
+
+def test_widget_key_rotation_is_per_store(client):
+    c, _cs = client
+    sid = _create_store(c, "Rotating Tenant")["id"]
+    hdrs = {**AUTH, "X-Store-Id": sid}
+
+    old_key = c.get("/support/widget", headers=hdrs).json()["key"]
+    r = c.post("/support/widget/key", headers=hdrs)
+    assert r.status_code == 200, r.text
+    new_key = r.json()["key"]
+    assert new_key and new_key != old_key
+
+    # Old key dies immediately; new key routes to the same store.
+    assert c.get("/chat/config", params={"key": old_key}).status_code == 401
+    assert c.get("/chat/config", params={"key": new_key}).status_code == 200
+
+    # Other stores / default scope are unaffected.
+    sid2 = _create_store(c, "Bystander")["id"]
+    key2 = c.get("/support/widget", headers={**AUTH, "X-Store-Id": sid2}).json()["key"]
+    assert key2 not in (old_key, new_key)
+    assert c.get("/chat/config", params={"key": key2}).status_code == 200
+
+
+async def _async_value(value):
+    return value
+
+
+def test_gorgias_credentials_never_fall_back_to_env(client, monkeypatch):
+    """In store scope Gorgias resolves ONLY from registry credentials; outside,
+    .env still drives the default desk."""
+    monkeypatch.setattr(settings, "GORGIAS_DOMAIN", "env-desk")
+    monkeypatch.setattr(settings, "GORGIAS_EMAIL", "env@example.test")
+    monkeypatch.setattr(settings, "GORGIAS_API_KEY", SecretStr("env-key"))
+    monkeypatch.setattr(settings, "GORGIAS_WEBHOOK_SECRET", "env-secret")
+
+    c, cs = client
+    r = c.post(
+        "/support/stores",
+        headers=AUTH,
+        json={
+            "name": "Own Desk",
+            "gorgias_domain": "acme",
+            "gorgias_email": "support@acme.test",
+            "gorgias_api_key": "acme-key",
+            "gorgias_webhook_secret": "acme-secret",
+        },
+    )
+    assert r.status_code == 201, r.text
+    sid_with = r.json()["store"]["id"]
+    sid_without = _create_store(c, "No Desk")["id"]
+
+    # Outside any scope: env credentials.
+    assert cs._gorgias.enabled is True
+    assert cs._gorgias.base_url == "https://env-desk.gorgias.com/api"
+    assert cs._gorgias.auth == ("env@example.test", "env-key")
+
+    # Store WITH its own desk: registry wins completely.
+    enabled, base_url, auth, secret = _run_in_store(
+        sid_with,
+        lambda: _async_value(
+            (
+                cs._gorgias.enabled,
+                cs._gorgias.base_url,
+                cs._gorgias.auth,
+                cs._gorgias_webhook_secret(),
+            )
+        ),
+    )
+    assert enabled is True
+    assert base_url == "https://acme.gorgias.com/api"
+    assert auth == ("support@acme.test", "acme-key")
+    assert secret == "acme-secret"
+
+    # Store WITHOUT Gorgias: disabled despite the env desk + env secret.
+    enabled_b, secret_b = _run_in_store(
+        sid_without, lambda: _async_value((cs._gorgias.enabled, cs._gorgias_webhook_secret()))
+    )
+    assert enabled_b is False
+    assert secret_b is None
+
+    # public_store redacts the secret, exposes presence + domain only.
+    pub = c.get(f"/support/stores/{sid_with}", headers=AUTH).json()["store"]
+    assert pub["has_gorgias_token"] is True
+    assert pub["gorgias_domain"] == "acme"
+    assert "acme-key" not in c.get("/support/stores", headers=AUTH).text
+    assert "acme-secret" not in c.get("/support/stores", headers=AUTH).text
+
+
+def test_gorgias_webhook_store_path_routes_and_checks_store_secret(client):
+    """Gorgias can't send headers, so each tenant configures a URL with its own
+    store id: /support/webhooks/gorgias/<sid>/ticket-created. The store's OWN
+    secret guards it; tickets/dedupe land in the store's DB."""
+    c, cs = client
+    r = c.post(
+        "/support/stores",
+        headers=AUTH,
+        json={
+            "name": "Hooked Tenant",
+            # webhook secret only (no desk creds) - keeps the reply dispatch
+            # disabled so the test never hits the network.
+            "gorgias_webhook_secret": "hooked-secret",
+        },
+    )
+    assert r.status_code == 201, r.text
+    sid = r.json()["store"]["id"]
+    path = f"/support/webhooks/gorgias/{sid}/ticket-created"
+
+    # Missing or wrong secret -> 401 (never the default scope's env secret).
+    assert c.post(path, json={"ticket": {"id": 1}}).status_code == 401
+    wrong = c.post(path, headers={"x-webhook-secret": "wrong"}, json={"ticket": {"id": 1}})
+    assert wrong.status_code == 401
+
+    # Warm this store's agent and swap in fakes (no LLM calls).
+    assert c.get("/support/tickets", headers={**AUTH, "X-Store-Id": sid}).status_code == 200
+    store_agent = multistore._agents[sid]
+    store_agent.classifier = FakeClassifier()
+    store_agent.response_engine = FakeResponseEngine()
+
+    payload = {
+        "id": "evt-store-1",
+        "ticket": {
+            "id": 42,
+            "subject": "Where is it?",
+            "customer": {"email": "shopper@example.test"},
+            "messages": [{"body_text": "Where is my order?"}],
+        },
+    }
+    ok = c.post(path, headers={"x-webhook-secret": "hooked-secret"}, json=payload)
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["received"] is True
+    ticket_id = ok.json()["ticket_id"]
+
+    # Duplicate event id -> deduped against the STORE's ledger.
+    dup = c.post(path, headers={"x-webhook-secret": "hooked-secret"}, json=payload)
+    assert dup.status_code == 200
+    assert dup.json()["duplicate"] is True
+
+    # The ticket lives in the store's file, not the primary DB.
+    ts = TicketStore(db_path=multistore.store_db_path(sid))
+    row = asyncio.run(ts.get(ticket_id))
+    assert row is not None
+    assert c.get(f"/support/tickets/{ticket_id}", headers=AUTH).status_code == 404
+
+    # Unknown store id in the path -> 404 (routing layer, before any handler).
+    missing = c.post(
+        f"/support/webhooks/gorgias/{'0' * 32}/ticket-created",
+        headers={"x-webhook-secret": "hooked-secret"},
+        json={"ticket": {"id": 1}},
+    )
+    assert missing.status_code == 404

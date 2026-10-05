@@ -25,6 +25,7 @@ token itself. Deleting a store drops its caches but keeps the per-store data
 file on disk (no silent data destruction); re-creating the store reuses it.
 """
 
+import hmac
 import json
 import uuid
 from contextlib import asynccontextmanager
@@ -79,6 +80,10 @@ INTEGRATION_CREDENTIAL_KEYS = (
     "subscription_provider",
     "return_address",
     "return_window_days",
+    "gorgias_domain",
+    "gorgias_email",
+    "gorgias_api_key",
+    "gorgias_webhook_secret",
 )
 
 
@@ -158,8 +163,34 @@ def public_store(rec: dict) -> dict:
     if "return_window_days" in creds:
         out["return_window_days"] = creds.get("return_window_days")
     if "return_address" in creds:
-        out["return_address"] = creds.get("return_address")
+        out["return_address"] = creds["return_address"]
+    # Gorgias: boolean presence + plain domain; email/api key/secret never echoed.
+    out["has_gorgias_token"] = bool(creds.get("gorgias_api_key"))
+    if creds.get("gorgias_domain"):
+        out["gorgias_domain"] = creds["gorgias_domain"]
+    if creds.get("gorgias_email"):
+        out["gorgias_email"] = creds["gorgias_email"]
     return out
+
+
+async def find_store_by_widget_key(widget_key: str) -> dict | None:
+    """Resolve a publishable widget key to its owning store.
+
+    The widget ships in a public <script> tag with only this key - it is how a
+    storefront says "route me to MY store" without any X-Store-Id header. Linear
+    scan over the registry: agencies run 3-8 stores, so a single SELECT is
+    cheaper than maintaining a second index table."""
+    if not widget_key:
+        return None
+    for rec in await list_stores():
+        stored = rec["credentials"].get("widget_key") or ""
+        try:
+            match = hmac.compare_digest(stored, widget_key)
+        except TypeError:
+            match = False  # non-ASCII input can never equal a token_urlsafe key
+        if match:
+            return rec
+    return None
 
 
 async def list_stores() -> list[dict]:
@@ -231,6 +262,32 @@ async def update_store(
     return updated
 
 
+async def set_store_credential(store_id: str, key: str, value: str) -> None:
+    """Persist one credential WITHOUT tearing down the live data-plane caches.
+
+    Used for the publishable widget key: it gates routing only, not the agent's
+    integrations. The heavyweight update_store() invalidates everything, which
+    would yank the TicketStore out from under the very in-scope request doing
+    the write (subsequent proxy access in that request would then raise).
+    The registry record cache is refreshed in place so integration_overrides()
+    sees the new value immediately."""
+    rec = await get_store(store_id)
+    if rec is None:
+        raise StoreNotFound(store_id)
+    creds = dict(rec["credentials"])
+    creds[key] = value
+    async with _connect() as db:
+        await db.execute(
+            "UPDATE stores SET credentials_json = ?, updated_at = ? WHERE id = ?",
+            (json.dumps(creds), _now(), store_id),
+        )
+        await db.commit()
+    cached = _store_records.get(store_id)
+    if cached is not None:
+        cached["credentials"] = creds
+    logger.info("store_credential_set", store_id=store_id, key=key)
+
+
 async def delete_store(store_id: str) -> bool:
     async with _connect() as db:
         cursor = await db.execute("DELETE FROM stores WHERE id = ?", (store_id,))
@@ -255,6 +312,9 @@ def invalidate_store(store_id: str) -> None:
     _ticket_stores.pop(store_id, None)
     _kbs.pop(store_id, None)
     _agents.pop(store_id, None)
+    from agent.product_sync import _store_states
+
+    _store_states.pop(store_id, None)
 
 
 def reset_caches() -> None:
@@ -271,7 +331,10 @@ def _build_agent(rec: dict):
     token = creds.get("shopify_access_token")
     shopify = None
     if rec.get("shop_domain"):
-        shopify = ShopifyClient(shop_domain=rec["shop_domain"], access_token=token)
+        # strict=True: a registered store NEVER falls back to the deployment's
+        # env credentials - missing token means "not configured", not "use the
+        # other tenant's token".
+        shopify = ShopifyClient(shop_domain=rec["shop_domain"], access_token=token, strict=True)
     return CustomerSupportAgent(shopify=shopify)
 
 

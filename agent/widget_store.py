@@ -21,6 +21,8 @@ from typing import Any
 import structlog
 
 from agent.config import settings
+from agent.multistore import get_store, set_store_credential
+from agent.multistore import get_store_id as _current_store_id
 from agent.setup_store import get_kv, set_kv
 
 logger = structlog.get_logger(__name__)
@@ -101,7 +103,26 @@ async def set_widget_config(data: dict[str, Any]) -> dict[str, Any]:
 
 
 async def get_widget_key() -> str:
-    """The effective publishable key: .env override, else stored, else generate once."""
+    """The effective publishable key for the current scope.
+
+    Store scope: the key lives in that store's registry record
+    (credentials_json.widget_key) - generated once and persisted there, so the
+    key that ROUTED the request to this store (middleware) is the key this
+    function validates against. The store's KV file is deliberately NOT used
+    here: the routing decision above can't see it.
+
+    Default scope (no X-Store-Id): unchanged - .env override, else the
+    app_settings KV row, else generate once."""
+    store_id = _current_store_id()
+    if store_id:
+        rec = await get_store(store_id)
+        stored = (rec or {}).get("credentials", {}).get("widget_key") or ""
+        if stored:
+            return stored
+        key = secrets.token_urlsafe(24)
+        await set_store_credential(store_id, "widget_key", key)
+        logger.info("widget_key_generated", store_id=store_id)
+        return key
     if settings.WIDGET_KEY:
         return settings.WIDGET_KEY.get_secret_value()
     stored = await get_kv(KEY_NAME)
@@ -114,12 +135,19 @@ async def get_widget_key() -> str:
 
 
 def widget_key_is_env_managed() -> bool:
-    return bool(settings.WIDGET_KEY)
+    # An env-managed key belongs to the default scope only - a registered
+    # store always has (or gets) its own registry key, so rotation is allowed.
+    return bool(settings.WIDGET_KEY) and not _current_store_id()
 
 
 async def rotate_widget_key() -> str:
     """Generate a fresh key and persist it. Callers must check env-managed first."""
     key = secrets.token_urlsafe(24)
+    store_id = _current_store_id()
+    if store_id:
+        await set_store_credential(store_id, "widget_key", key)
+        logger.info("widget_key_rotated", store_id=store_id)
+        return key
     await set_kv(KEY_NAME, key)
     logger.info("widget_key_rotated")
     return key

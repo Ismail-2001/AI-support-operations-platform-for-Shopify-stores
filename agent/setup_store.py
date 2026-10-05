@@ -43,17 +43,30 @@ _ENV_KEYS = ("SHOPIFY_SHOP_DOMAIN", "SHOPIFY_ACCESS_TOKEN")
 
 
 # ── KV helpers ────────────────────────────────────────────────────────────────
+#
+# KV reads/writes follow the same store-scoping rule as automation thresholds
+# (agent/automation.py): the app_settings table lives in whichever TicketStore
+# DB the current request resolves to - the per-store file inside an X-Store-Id
+# scope, the primary DB otherwise. This is what isolates brand voice, widget
+# config, ROI assumptions, and wizard flags per tenant. The store *registry*
+# deliberately does NOT use these helpers (it always targets settings.DB_PATH).
+
+
+def _kv_db_path() -> str:
+    import agent.storage as storage_module
+
+    return storage_module.store.db_path
 
 
 async def get_kv(key: str) -> str | None:
-    async with aiosqlite.connect(settings.DB_PATH) as db:
+    async with aiosqlite.connect(_kv_db_path()) as db:
         cursor = await db.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
         row = await cursor.fetchone()
     return row[0] if row else None
 
 
 async def set_kv(key: str, value: str) -> None:
-    async with aiosqlite.connect(settings.DB_PATH) as db:
+    async with aiosqlite.connect(_kv_db_path()) as db:
         await db.execute(
             "INSERT INTO app_settings (key, value) VALUES (?, ?) "
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
