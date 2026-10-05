@@ -13,35 +13,12 @@ env:
 
 jobs:
   # ──────────────────────────────────────────────────────────────
-  # Lint & Format Check
+  # Backend: ruff lint + format check, pip-audit, pytest
+  # (single job — one runner, fast fail, no cross-job scheduling)
   # ──────────────────────────────────────────────────────────────
-  lint:
-    name: Lint & Format
+  backend:
+    name: Backend (Lint, Format & Tests)
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_VERSION }}
-
-      - name: Install ruff
-        run: pip install ruff==0.6.9
-
-      - name: Run ruff lint
-        run: ruff check . --output-format=github
-
-      - name: Run ruff format check
-        run: ruff format --check .
-
-  # ──────────────────────────────────────────────────────────────
-  # Python Tests
-  # ──────────────────────────────────────────────────────────────
-  test-python:
-    name: Python Tests
-    runs-on: ubuntu-latest
-    needs: lint
     steps:
       - uses: actions/checkout@v4
 
@@ -53,6 +30,12 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
+
+      - name: Run ruff lint
+        run: ruff check . --output-format=github
+
+      - name: Run ruff format check
+        run: ruff format --check .
 
       - name: Dependency security audit (pip-audit)
         run: pip-audit -r requirements.lock
@@ -67,12 +50,12 @@ jobs:
         run: pytest tests/ -v --tb=short -x
 
   # ──────────────────────────────────────────────────────────────
-  # TypeScript Lint & Build
+  # Dashboard: audit, tsc, vitest, vite build
+  # (independent of backend — both suites reported every run)
   # ──────────────────────────────────────────────────────────────
   test-dashboard:
     name: Dashboard Build
     runs-on: ubuntu-latest
-    needs: lint
     defaults:
       run:
         working-directory: dashboard
@@ -110,7 +93,7 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [test-python, test-dashboard]
+    needs: [backend, test-dashboard]
     steps:
       - uses: actions/checkout@v4
 
@@ -132,7 +115,7 @@ jobs:
   deploy-staging:
     name: Deploy to Staging
     runs-on: ubuntu-latest
-    needs: [test-python, test-dashboard, docker]
+    needs: [backend, test-dashboard, docker]
     if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     environment: staging
     steps:
@@ -153,7 +136,7 @@ jobs:
   deploy-production:
     name: Deploy to Production
     runs-on: ubuntu-latest
-    needs: [test-python, test-dashboard, docker]
+    needs: [backend, test-dashboard, docker]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: production
     steps:
