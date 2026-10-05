@@ -30,7 +30,7 @@ from agent.utils import redact_pii
 
 logger = structlog.get_logger(__name__)
 
-PROMPT_VERSION = "response_v2"
+PROMPT_VERSION = "response_v3"
 
 
 def _safe_subscription_operation(ticket_id: str, raw: str | None) -> SubscriptionOperation | None:
@@ -194,6 +194,7 @@ class ResponseGenerationEngine:
         order_context: str | None = None,
         knowledge_context: str | None = None,
         subscription_context: str | None = None,
+        return_context: str | None = None,
         history: list[TicketMessage] | None = None,
     ) -> ResponseSuggestion:
         order_block = order_context or "No order data available for this ticket."
@@ -201,6 +202,9 @@ class ResponseGenerationEngine:
         sub_block = subscription_context or (
             "No subscription data available for this ticket (subscription app not involved "
             "or not connected)."
+        )
+        return_block = return_context or (
+            "No return eligibility data available for this ticket (no order in scope)."
         )
         transcript = format_transcript(history) if history else f"Customer: {ticket.body}"
         redacted_transcript = redact_pii(transcript)
@@ -219,6 +223,7 @@ class ResponseGenerationEngine:
                 f"Order context:\n{order_block}\n\n"
                 f"Knowledge base context:\n{kb_block}\n\n"
                 f"Subscription context:\n{sub_block}\n\n"
+                f"Return context:\n{return_block}\n\n"
                 f"Draft the next reply.",
             ),
         ]
@@ -306,6 +311,7 @@ class ResponseGenerationEngine:
                 "order_context": order_block,
                 "knowledge_context": kb_block,
                 "subscription_context": sub_block,
+                "return_context": return_block,
                 "classification": classification.model_dump(mode="json"),
             },
             output_summary=suggestion.model_dump(mode="json"),

@@ -2,7 +2,7 @@
 
 **Product:** Shopify AI Support Agent
 **Audience:** Store owners evaluating the agent for their support inbox
-**Source:** The automated test suite (the same one we run before every release). Real model, real outputs, nothing scripted or edited. Latest full run: **15/15 passed — 4 October 2026**. The dataset has since grown to **23 golden cases** — the 4 new action-suggestion cases are verified by the harness on every run; a live model run of the expanded set is pending provider credits.
+**Source:** The automated test suite (the same one we run before every release). Real model, real outputs, nothing scripted or edited. Latest full run: **15/15 passed — 4 October 2026**. The dataset has since grown to **30 golden cases** — the action-suggestion, subscription, return-label, and adversarial expectations are verified by the harness on every run; a live model run of the expanded set is pending provider credits.
 
 ---
 
@@ -147,7 +147,7 @@ The agent can now propose three operational actions — **cancel an unfulfilled 
 
 ## Full results available on request
 
-The four cases above are from the most recent full run of our suite: **15/15 passed (100%), with 100% correct classification** — including both adversarial prompt-injection cases. The suite now contains 23 golden cases, adding action-suggestion coverage (cancel before shipment, address typo, single-item refund, and a cancel request on an already-delivered order that must *not* propose a cancel). We re-run the full suite before every release and whenever a prompt changes.
+The four cases above are from the most recent full run of our suite: **15/15 passed (100%), with 100% correct classification** — including both adversarial prompt-injection cases. The suite now contains 30 golden cases, adding action-suggestion coverage (cancel before shipment, address typo, single-item refund, and a cancel request on an already-delivered order that must *not* propose a cancel), all five subscription operations, edge cases (oversized refund demand, already-cancelled order, address change after shipment), and a return-label case driven by eligibility fixtures. We re-run the full suite before every release and whenever a prompt changes.
 
 Ask us for the complete report and you'll get the dated JSON from the latest run, every case's input and output, and an explanation of what each test proves. Happy to run it live on a call as well.
 

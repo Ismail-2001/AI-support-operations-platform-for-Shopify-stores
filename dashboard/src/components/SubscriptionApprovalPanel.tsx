@@ -34,6 +34,25 @@ const ADDRESS_FIELDS: { key: string; label: string; required?: boolean }[] = [
   { key: "name", label: "Recipient name" },
 ];
 
+/** Date + one billing cycle (UTC), or null when we cannot compute it. */
+function addCycle(dateStr: string, unit: string | null | undefined, count: number | null | undefined): string | null {
+  const base = new Date(`${dateStr.slice(0, 10)}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return null;
+  const n = count && count > 0 ? count : 1;
+  if (unit === "day") base.setUTCDate(base.getUTCDate() + n);
+  else if (unit === "week") base.setUTCDate(base.getUTCDate() + 7 * n);
+  else if (unit === "month") base.setUTCMonth(base.getUTCMonth() + n);
+  else return null;
+  return base.toISOString().slice(0, 10);
+}
+
+function formatAddress(a: Record<string, string> | null | undefined): string {
+  if (!a) return "—";
+  const line1 = [a.address1, a.address2].filter(Boolean).join(", ");
+  const cityLine = [a.city, a.state, a.zip].filter(Boolean).join(" ");
+  return [line1, cityLine, a.country].filter(Boolean).join(" · ") || "—";
+}
+
 export function SubscriptionApprovalPanel({
   connection,
   ticketId,
@@ -82,6 +101,33 @@ export function SubscriptionApprovalPanel({
   }, [connection, ticketId]);
 
   const sub = subs.find((s) => s.id === subscriptionId) ?? null;
+
+  // Current vs proposed, so the operator sees exactly what changes before approving.
+  const changes: { label: string; current: string; proposed: string }[] = [];
+  if (sub && operation) {
+    const nextDate = sub.next_charge_date ? String(sub.next_charge_date).slice(0, 10) : null;
+    const curFreq = sub.frequency_unit
+      ? `every ${sub.frequency_count ?? "—"} ${sub.frequency_unit}`
+      : "—";
+    if (operation === "cancel") {
+      changes.push({ label: "Status", current: sub.status, proposed: "cancelled (permanent)" });
+      if (nextDate) changes.push({ label: "Next charge", current: nextDate, proposed: "none" });
+    } else if (operation === "pause") {
+      changes.push({ label: "Status", current: sub.status, proposed: "paused" });
+      if (nextDate) changes.push({ label: "Next charge", current: nextDate, proposed: "delayed (paused)" });
+    } else if (operation === "skip") {
+      const proposed = nextDate ? addCycle(nextDate, sub.frequency_unit, sub.frequency_count) : null;
+      changes.push({
+        label: "Next scheduled order",
+        current: nextDate ?? "—",
+        proposed: proposed ?? "one cycle later",
+      });
+    } else if (operation === "change_frequency") {
+      changes.push({ label: "Frequency", current: curFreq, proposed: `every ${count} ${unit}` });
+    } else if (operation === "update_address") {
+      changes.push({ label: "Ship to", current: formatAddress(sub.address), proposed: formatAddress(addr) });
+    }
+  }
 
   const missingRequired =
     operation === "update_address"
@@ -214,6 +260,29 @@ export function SubscriptionApprovalPanel({
                   </span>
                 )}
               </p>
+            </div>
+          )}
+
+          {configured && sub && changes.length > 0 && (
+            <div
+              data-testid="proposed-change"
+              className="rounded-lg border border-teal/30 bg-teal/5 dark:bg-teal/10 px-3 py-2 text-xs text-ink-700 dark:text-ink-dark-700 space-y-1"
+            >
+              <p className="font-mono text-[11px] uppercase tracking-[0.1em] text-ink-400 dark:text-ink-dark-400">
+                Current vs proposed
+              </p>
+              {changes.map((ch) => (
+                <p key={ch.label} className="flex gap-1.5 flex-wrap items-baseline">
+                  <span className="text-ink-400 dark:text-ink-dark-400 w-[120px] shrink-0">
+                    {ch.label}:
+                  </span>
+                  <span className="text-ink-500 dark:text-ink-dark-500">{ch.current}</span>
+                  <span className="text-teal" aria-hidden="true">
+                    →
+                  </span>
+                  <span className="font-medium">{ch.proposed}</span>
+                </p>
+              ))}
             </div>
           )}
 

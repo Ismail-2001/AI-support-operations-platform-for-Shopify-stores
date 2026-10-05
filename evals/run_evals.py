@@ -73,6 +73,8 @@ async def run_case(
         # Optional per-case fixture: lets subscription cases exercise the real
         # prompt path with subscription data present (or absent, by omitting it).
         subscription_context=case.get("subscription_context"),
+        # Same idea for return eligibility (return_label suggestion cases).
+        return_context=case.get("return_context"),
         history=history,
     )
 

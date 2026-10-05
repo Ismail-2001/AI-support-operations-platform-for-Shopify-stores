@@ -431,6 +431,7 @@ def _create_ticket(c, email="a@b.com"):
 
 class _FakeService:
     instances: ClassVar[list] = []
+    calls: ClassVar[list[str]] = []
 
     def __init__(self, provider=None):
         self.provider = provider or "recharge"
@@ -443,11 +444,30 @@ class _FakeService:
             NormalizedSubscription(id="sub-1", provider="recharge", status="ACTIVE", title="Coffee")
         ]
 
+    def _ok(self, subscription_id, status="ACTIVE", **extra):
+        return NormalizedSubscription(
+            id=subscription_id, provider="recharge", status=status, title="Coffee", **extra
+        )
+
     async def pause(self, subscription_id):
         self.pause_calls += 1
-        return NormalizedSubscription(
-            id=subscription_id, provider="recharge", status="ACTIVE", title="Coffee"
-        )
+        return self._ok(subscription_id)
+
+    async def skip(self, subscription_id):
+        _FakeService.calls.append(f"skip:{subscription_id}")
+        return self._ok(subscription_id)
+
+    async def cancel(self, subscription_id, reason="Requested by customer"):
+        _FakeService.calls.append(f"cancel:{subscription_id}")
+        return self._ok(subscription_id, status="CANCELLED")
+
+    async def update_address(self, subscription_id, address):
+        _FakeService.calls.append(f"address:{subscription_id}")
+        return self._ok(subscription_id)
+
+    async def change_frequency(self, subscription_id, unit, count):
+        _FakeService.calls.append(f"freq:{subscription_id}:{unit}:{count}")
+        return self._ok(subscription_id)
 
 
 def test_get_subscriptions_unconfigured_returns_configured_false(client):
@@ -598,3 +618,212 @@ def test_subscription_action_update_address_requires_address(client):
         },
     )
     assert r2.status_code == 422  # pydantic validator: needs address1/city/country/zip
+
+
+# ── Action execution, failure mapping, idempotency families ─────────
+
+
+def test_subscription_action_degraded_provider_maps_to_409_and_audits(client):
+    """No Recharge/Skio connected: the action endpoint must return the documented
+    409 SUBSCRIPTION_NOT_CONNECTED (never a 500) AND leave a failed audit row."""
+    c, cs_module = client
+    ticket_id = _create_ticket(c)
+    # Real SubscriptionService (fixture cleared both tokens) - nothing patched.
+
+    key = "sub-degraded"
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/subscription",
+        headers={**AUTH, "Idempotency-Key": key},
+        json={"subscription_id": "sub-1", "operation": "pause"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "SUBSCRIPTION_NOT_CONNECTED"
+
+    import asyncio
+
+    import agent.storage as storage_module
+
+    audit = asyncio.run(storage_module.store.get_action_audit(key))
+    assert audit is not None
+    assert audit["action"] == "subscription_pause"
+    assert audit["status"] == "failed"
+    assert "connected" in audit["error"].lower()
+
+    # Replaying the failed key returns the stored failure, not a second attempt.
+    r2 = c.post(
+        f"/support/tickets/{ticket_id}/actions/subscription",
+        headers={**AUTH, "Idempotency-Key": key},
+        json={"subscription_id": "sub-1", "operation": "pause"},
+    )
+    assert r2.status_code == 200
+    assert r2.json()["replayed"] is True
+    assert r2.json()["status"] == "failed"
+    assert r2.json()["error"]
+
+
+def test_subscription_guard_failure_maps_to_409_and_audits(client):
+    c, cs_module = client
+    ticket_id = _create_ticket(c)
+    _FakeService.calls.clear()
+
+    from integrations.subscriptions import SubscriptionInvalidState
+
+    class _GuardedService(_FakeService):
+        async def cancel(self, subscription_id, reason="Requested by customer"):
+            raise SubscriptionInvalidState("already cancelled")
+
+    cs_module.SubscriptionService = _GuardedService
+    key = "sub-guarded"
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/subscription",
+        headers={**AUTH, "Idempotency-Key": key},
+        json={"subscription_id": "sub-1", "operation": "cancel"},
+    )
+    assert r.status_code == 409, r.text
+    assert r.json()["error"] == "SUBSCRIPTION_INVALID_STATE"
+
+    import asyncio
+
+    import agent.storage as storage_module
+
+    audit = asyncio.run(storage_module.store.get_action_audit(key))
+    assert audit["status"] == "failed"
+    assert "already cancelled" in audit["error"]
+    assert _FakeService.calls == []  # guard fired before any provider call
+
+
+def test_subscription_remaining_operations_execute_end_to_end(client):
+    """skip / cancel / update_address / change_frequency all execute, each with
+    its own audit action name - not just pause."""
+    c, cs_module = client
+    ticket_id = _create_ticket(c)
+    _FakeService.calls.clear()
+    _FakeService.instances.clear()
+    cs_module.SubscriptionService = _FakeService
+
+    import asyncio
+
+    import agent.storage as storage_module
+
+    cases = [
+        ("sub-skip", {"operation": "skip"}, "subscription_skip", "skip:sub-1"),
+        ("sub-cancel", {"operation": "cancel"}, "subscription_cancel", "cancel:sub-1"),
+        (
+            "sub-addr",
+            {
+                "operation": "update_address",
+                "address": {
+                    "address1": "9 New Rd",
+                    "city": "Austin",
+                    "country": "US",
+                    "zip": "78701",
+                },
+            },
+            "subscription_update_address",
+            "address:sub-1",
+        ),
+        (
+            "sub-freq-ok",
+            {"operation": "change_frequency", "frequency": {"unit": "week", "count": 2}},
+            "subscription_change_frequency",
+            "freq:sub-1:week:2",
+        ),
+    ]
+    for key, payload, audit_action, expected_call in cases:
+        r = c.post(
+            f"/support/tickets/{ticket_id}/actions/subscription",
+            headers={**AUTH, "Idempotency-Key": key},
+            json={"subscription_id": "sub-1", **payload},
+        )
+        assert r.status_code == 200, f"{key}: {r.text}"
+        assert r.json()["replayed"] is False
+        audit = asyncio.run(storage_module.store.get_action_audit(key))
+        assert audit is not None and audit["action"] == audit_action
+        assert audit["status"] == "succeeded"
+        assert _FakeService.calls[-1] == expected_call
+    assert _FakeService.calls == [expected for *_, expected in cases]
+
+
+def test_subscription_action_rejects_cross_family_refund_key(client):
+    """A refund Idempotency-Key must not be spendable on a subscription action."""
+    c, _cs = client
+    ticket_id = _create_ticket(c)
+
+    import asyncio
+
+    import agent.storage as storage_module
+
+    asyncio.run(
+        storage_module.store.record_refund_audit(
+            "shared-key", ticket_id, "ord-1", 10.0, "why", status="succeeded"
+        )
+    )
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/subscription",
+        headers={**AUTH, "Idempotency-Key": "shared-key"},
+        json={"subscription_id": "sub-1", "operation": "pause"},
+    )
+    assert r.status_code == 409
+    assert r.json()["error"] == "IDEMPOTENCY_KEY_CONFLICT"
+    assert r.json()["details"]["table"] == "refund_audit"
+
+
+# ── Store-scoped provider tokens (agency mode) ─────────────────────
+
+
+def test_provider_clients_honor_store_scoped_tokens(monkeypatch):
+    monkeypatch.setattr(settings, "RECHARGE_API_TOKEN", SecretStr("env-token"))
+    monkeypatch.setattr(settings, "SKIO_API_TOKEN", None)
+
+    # Outside a store scope the env token applies, as before.
+    assert RechargeClient().enabled is True
+    assert RechargeClient().headers["X-Recharge-Access-Token"] == "env-token"
+
+    # Explicit store-scoped token wins...
+    scoped = RechargeClient(api_token="store-token")
+    assert scoped.enabled is True
+    assert scoped.headers["X-Recharge-Access-Token"] == "store-token"
+
+    # ...and an empty store token disables the client - NO env fallback.
+    disabled = RechargeClient(api_token="")
+    assert disabled.enabled is False
+
+    assert SkioClient(api_token="sk-store").enabled is True
+    assert SkioClient(api_token="").enabled is False
+
+
+def test_subscription_service_resolves_tokens_per_store(monkeypatch):
+    from agent import multistore
+
+    monkeypatch.setattr(settings, "RECHARGE_API_TOKEN", SecretStr("env-token"))
+    monkeypatch.setattr(settings, "SKIO_API_TOKEN", None)
+    monkeypatch.setattr(settings, "SUBSCRIPTION_PROVIDER", "auto")
+
+    # Outside store scope: env Recharge wins.
+    assert SubscriptionService().provider == "recharge"
+
+    def in_store(store_id, credentials):
+        multistore._store_records[store_id] = {"credentials": credentials}
+        token = multistore.current_store_id.set(store_id)
+        try:
+            return SubscriptionService()
+        finally:
+            multistore.current_store_id.reset(token)
+            multistore._store_records.pop(store_id, None)
+
+    # Store scoped to Skio only: env Recharge must NOT leak in.
+    svc = in_store("store-skio", {"skio_api_token": "sk-1"})
+    assert svc.enabled is True
+    assert svc.provider == "skio"
+
+    # Store with no subscription credentials: nothing is connected.
+    svc = in_store("store-none", {})
+    assert svc.enabled is False
+    assert svc.provider is None
+
+    # Explicit per-store provider override.
+    svc = in_store(
+        "store-both",
+        {"recharge_api_token": "rc-1", "skio_api_token": "sk-1", "subscription_provider": "skio"},
+    )
+    assert svc.provider == "skio"

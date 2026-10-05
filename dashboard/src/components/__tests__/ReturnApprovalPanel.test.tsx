@@ -3,11 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ReturnApprovalPanel } from "../ReturnApprovalPanel";
 import { api } from "../../lib/api";
-import type { ReturnEligibility, SuggestedAction } from "../../lib/types";
+import type { ReturnEligibility, ReturnRate, SuggestedAction } from "../../lib/types";
 
 vi.mock("../../lib/api", () => ({
   api: {
     getReturnEligibility: vi.fn(),
+    getReturnRates: vi.fn(),
     approveReturnLabel: vi.fn(),
   },
   ApiError: class ApiError extends Error {
@@ -32,6 +33,11 @@ const ELIGIBLE: ReturnEligibility = {
   label_provider: { provider: "shipengine", configured: true, missing_settings: [] },
 };
 
+const RATES: ReturnRate[] = [
+  { rate_id: "r-usps", carrier: "USPS", service: "Ground Advantage", amount: 4.35, currency: "USD" },
+  { rate_id: "r-ups", carrier: "UPS", service: "Ground", amount: 7.2, currency: "USD" },
+];
+
 const ACTION: SuggestedAction = {
   type: "return_label",
   order_id: "999",
@@ -42,6 +48,12 @@ const ACTION: SuggestedAction = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(api.getReturnEligibility).mockResolvedValue(ELIGIBLE);
+  vi.mocked(api.getReturnRates).mockResolvedValue({
+    ticket_id: "t1",
+    order_id: "999",
+    rates: RATES,
+    cheapest_rate_id: "r-usps",
+  });
 });
 
 describe("ReturnApprovalPanel", () => {
@@ -82,8 +94,61 @@ describe("ReturnApprovalPanel", () => {
     const [, ticketId, body, idempotencyKey] = vi.mocked(api.approveReturnLabel).mock.calls[0];
     expect(ticketId).toBe("t1");
     expect(body.reason).toBe("Damaged on arrival");
+    expect(body.rate_id).toBe("r-usps");
     expect(typeof idempotencyKey).toBe("string");
     expect(onApproved).toHaveBeenCalled();
+  });
+
+  it("shows live carrier costs before approval and defaults to the cheapest rate", async () => {
+    render(<ReturnApprovalPanel connection={conn} ticketId="t1" action={ACTION} onApproved={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/Carrier cost before purchase/)).toBeInTheDocument());
+    expect(screen.getByText("$4.35")).toBeInTheDocument();
+    expect(screen.getByText("$7.20")).toBeInTheDocument();
+    expect(screen.getByText(/USPS · Ground Advantage/)).toBeInTheDocument();
+    expect(screen.getByLabelText(/USPS · Ground Advantage/)).toBeChecked();
+    expect(screen.getByText(/cheapest/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByText("Approve return label"));
+    expect(screen.getByText(/Buy this label for USPS at \$4\.35/)).toBeInTheDocument();
+  });
+
+  it("lets the operator pick a different carrier rate", async () => {
+    vi.mocked(api.approveReturnLabel).mockResolvedValue({
+      label: { label_id: "L-2", carrier: "UPS", cost_usd: 7.2 },
+      replayed: false,
+    });
+    render(<ReturnApprovalPanel connection={conn} ticketId="t1" action={ACTION} onApproved={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/Carrier cost before purchase/)).toBeInTheDocument());
+
+    await userEvent.click(screen.getByLabelText(/UPS · Ground/));
+    await userEvent.click(screen.getByText("Approve return label"));
+    await userEvent.click(screen.getByText("Confirm"));
+    await waitFor(() => expect(screen.getByText("Return label created.")).toBeInTheDocument());
+
+    const [, , body] = vi.mocked(api.approveReturnLabel).mock.calls[0];
+    expect(body.rate_id).toBe("r-ups");
+  });
+
+  it("blocks approval when the carrier returns no rates", async () => {
+    vi.mocked(api.getReturnRates).mockResolvedValue({
+      ticket_id: "t1",
+      order_id: "999",
+      rates: [],
+      cheapest_rate_id: null,
+    });
+    render(<ReturnApprovalPanel connection={conn} ticketId="t1" action={ACTION} onApproved={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/No carrier rates available/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "No carrier rates" })).toBeDisabled();
+    expect(api.approveReturnLabel).not.toHaveBeenCalled();
+  });
+
+  it("keeps approval available when live rates cannot be fetched", async () => {
+    vi.mocked(api.getReturnRates).mockRejectedValue(
+      new (await import("../../lib/api")).ApiError(503, "ShipEngine unreachable"),
+    );
+    render(<ReturnApprovalPanel connection={conn} ticketId="t1" action={ACTION} onApproved={vi.fn()} />);
+    await waitFor(() => expect(screen.getByText(/Rates unavailable/)).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Approve return label" })).toBeEnabled();
   });
 
   it("blocks approval when the return window has expired", async () => {

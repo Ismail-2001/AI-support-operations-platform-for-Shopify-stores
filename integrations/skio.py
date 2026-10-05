@@ -73,11 +73,20 @@ class SkioClient:
     provider_name = "skio"
     BASE_URL = "https://graphql.skio.com/v1/graphql"
 
-    def __init__(self):
-        self.enabled = bool(settings.SKIO_API_TOKEN)
+    def __init__(self, api_token: str | None = None):
+        # None = process env; a string = store-scoped token from the registry
+        # ("" disables the client — no cross-tenant env fallback).
+        if api_token is None:
+            self.enabled = bool(settings.SKIO_API_TOKEN)
+            token = (
+                settings.SKIO_API_TOKEN.get_secret_value() if settings.SKIO_API_TOKEN else ""
+            )
+        else:
+            token = str(api_token).strip()
+            self.enabled = bool(token)
         if self.enabled:
             self.headers = {
-                "authorization": f"API {settings.SKIO_API_TOKEN.get_secret_value()}",
+                "authorization": f"API {token}",
                 "Content-Type": "application/graphql",
             }
 

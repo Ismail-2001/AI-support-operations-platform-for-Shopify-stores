@@ -1,6 +1,7 @@
 import type {
   AutoSendReport, BrandVoice, CalibrationReport, CostReport, KbSyncStatus, KnowledgeBaseStatus,
   LiveStockVariant, NormalizedSubscription, QualityStats, ReturnEligibility, ReturnLabelResult,
+  ReturnRates,
   RoiAssumptions, RoiReport, SetupShopifyResult, SetupStatus,
   SetupTestResult, StoreRecord, SupportAnalytics, ThresholdSetting, TicketMessage, TicketOrder,
   TicketSubscriptions, TicketWithSuggestion, TraceEntry, WidgetConfig, WidgetSettings,
@@ -179,10 +180,15 @@ export const api = {
   getReturnEligibility: (conn: Connection, id: string) =>
     request<ReturnEligibility>(conn, `/support/tickets/${id}/return-eligibility`),
 
+  /** Live carrier rates for the ticket's order - the operator sees the actual
+   * cost (billed to their ShipEngine account) before approving the purchase. */
+  getReturnRates: (conn: Connection, id: string) =>
+    request<ReturnRates>(conn, `/support/tickets/${id}/return-rates`),
+
   approveReturnLabel: (
     conn: Connection,
     id: string,
-    body: { rma_number?: string; reason?: string },
+    body: { rma_number?: string; reason?: string; rate_id?: string },
     idempotencyKey: string,
   ) =>
     request<{ label: ReturnLabelResult; replayed: boolean }>(

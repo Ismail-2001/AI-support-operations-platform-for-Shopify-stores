@@ -111,6 +111,7 @@ class FakeResponseEngine:
         order_context=None,
         knowledge_context=None,
         subscription_context=None,
+        return_context=None,
         history=None,
     ):
         return ResponseSuggestion(

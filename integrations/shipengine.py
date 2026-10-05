@@ -18,7 +18,7 @@ estimate, so the audit trail records what was really charged.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import structlog
@@ -70,25 +70,66 @@ def _address_block(prefix: str, values: dict[str, str | None]) -> dict[str, Any]
 class ShipEngineClient:
     BASE_URL = "https://api.shipengine.com/v1"
 
+    # settings attribute -> short key in a store's return_address override
+    _ADDR_ENV: ClassVar[dict[str, str]] = {
+        "name": "RETURN_ADDRESS_NAME",
+        "address1": "RETURN_ADDRESS1",
+        "address2": "RETURN_ADDRESS2",
+        "city": "RETURN_CITY",
+        "state": "RETURN_STATE",
+        "zip": "RETURN_ZIP",
+        "country": "RETURN_COUNTRY",
+        "phone": "RETURN_PHONE",
+    }
+
+    def __init__(self, overrides: dict | None = None):
+        # None = resolve from the X-Store-Id context (agency mode); when there is
+        # no store scope this is also None and process env applies, exactly as
+        # before. Explicit dict = tests / forced overrides. Inside a store scope
+        # the API key comes from the registry ONLY - no env fallback, so one
+        # tenant's ShipEngine account never serves another tenant's labels.
+        if overrides is None:
+            from agent.multistore import integration_overrides
+
+            overrides = integration_overrides()
+        self.overrides = overrides
+
     @property
     def enabled(self) -> bool:
-        return bool(settings.SHIPENGINE_API_KEY)
+        return bool(self._api_key())
+
+    def _api_key(self) -> str:
+        if self.overrides is not None:
+            return str(self.overrides.get("shipengine_api_key") or "")
+        return settings.SHIPENGINE_API_KEY.get_secret_value() if settings.SHIPENGINE_API_KEY else ""
+
+    def _address_field(self, short: str) -> str:
+        env_name = self._ADDR_ENV[short]
+        if self.overrides is not None:
+            value = (self.overrides.get("return_address") or {}).get(short)
+            if value not in (None, ""):
+                return str(value)
+        return getattr(settings, env_name) or ""
 
     @property
     def configured(self) -> tuple[bool, list[str]]:
-        """(enabled, list of missing RETURN_ADDRESS_* fields) — the return-eligibility
-        endpoint surfaces these so the agent can tell the operator what to fill in."""
-        missing = [
-            f
-            for f in ("RETURN_ADDRESS_NAME", "RETURN_ADDRESS1", "RETURN_CITY", "RETURN_ZIP")
-            if not getattr(settings, f)
-        ]
+        """(enabled, list of missing settings as their env-var names) - the
+        return-eligibility endpoint surfaces these so the agent can tell the
+        operator exactly what to fill in (API key and/or return address)."""
+        missing = []
+        if not self.enabled:
+            missing.append("SHIPENGINE_API_KEY")
+        missing.extend(
+            self._ADDR_ENV[short]
+            for short in ("name", "address1", "city", "zip")
+            if not self._address_field(short)
+        )
         return (self.enabled and not missing, missing)
 
     def _headers(self) -> dict[str, str]:
         if not self.enabled:
             raise_not_configured("ShipEngine")
-        return {"API-Key": settings.SHIPENGINE_API_KEY.get_secret_value()}
+        return {"API-Key": self._api_key()}
 
     @retry(
         retry=retry_if_exception(_is_transient),
@@ -148,14 +189,14 @@ class ShipEngineClient:
             "ship_to": _address_block(
                 "to",
                 {
-                    "name": settings.RETURN_ADDRESS_NAME,
-                    "address1": settings.RETURN_ADDRESS1,
-                    "address2": settings.RETURN_ADDRESS2,
-                    "city": settings.RETURN_CITY,
-                    "state": settings.RETURN_STATE,
-                    "zip": settings.RETURN_ZIP,
-                    "country": settings.RETURN_COUNTRY,
-                    "phone": settings.RETURN_PHONE,
+                    "name": self._address_field("name"),
+                    "address1": self._address_field("address1"),
+                    "address2": self._address_field("address2"),
+                    "city": self._address_field("city"),
+                    "state": self._address_field("state"),
+                    "zip": self._address_field("zip"),
+                    "country": self._address_field("country"),
+                    "phone": self._address_field("phone"),
                 },
             ),
             "packages": [self._package()],

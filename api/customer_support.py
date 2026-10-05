@@ -339,6 +339,26 @@ class RefundActionRequest(BaseModel):
     refund_line_items: list[RefundLineItem] | None = None
 
 
+async def _reject_cross_family_key(idempotency_key: str, own_table: str) -> None:
+    """Reject an Idempotency-Key already spent in a DIFFERENT action family.
+
+    Families: refund_audit, resend_audit, action_audit (cancel / edit-address /
+    subscription), return_label_audit. Within a family each endpoint keeps its
+    own replay + conflict rules; across families the key is a client bug and we
+    return 409 rather than silently executing a different action."""
+    family = await store.find_idempotency_family(idempotency_key)
+    if family and family != own_table:
+        raise APIError(
+            code="IDEMPOTENCY_KEY_CONFLICT",
+            message=(
+                f"Idempotency-Key was already used for a different action "
+                f"(table '{family}') - generate a new key"
+            ),
+            status=409,
+            details={"table": family},
+        )
+
+
 @router.post("/tickets/{ticket_id}/actions/refund", dependencies=[Depends(rate_limit_refund)])
 async def approve_refund(
     ticket_id: str,
@@ -369,6 +389,7 @@ async def approve_refund(
             "refund": existing["shopify_response"],
             "replayed": True,
         }
+    await _reject_cross_family_key(idempotency_key, "refund_audit")
 
     row = await store.get(ticket_id)
     if not row:
@@ -525,6 +546,7 @@ async def approve_resend_order(
             "resend": existing["shopify_response"],
             "replayed": True,
         }
+    await _reject_cross_family_key(idempotency_key, "resend_audit")
 
     row = await store.get(ticket_id)
     if not row:
@@ -667,6 +689,7 @@ async def approve_cancel_order(
             "cancel": existing["shopify_response"],
             "replayed": True,
         }
+    await _reject_cross_family_key(idempotency_key, "action_audit")
 
     row = await store.get(ticket_id)
     if not row:
@@ -811,6 +834,7 @@ async def approve_edit_address(
             "order": existing["shopify_response"],
             "replayed": True,
         }
+    await _reject_cross_family_key(idempotency_key, "action_audit")
 
     row = await store.get(ticket_id)
     if not row:
@@ -1054,8 +1078,11 @@ async def approve_subscription_action(
             "ticket_id": existing["ticket_id"],
             "subscription": (existing.get("shopify_response") or {}).get("subscription"),
             "operation": req.operation.value,
+            "status": existing["status"],
+            "error": existing.get("error"),
             "replayed": True,
         }
+    await _reject_cross_family_key(idempotency_key, "action_audit")
 
     row = await store.get(ticket_id)
     if not row:
@@ -1064,30 +1091,45 @@ async def approve_subscription_action(
     audit_request = req.model_dump(mode="json")
     service = _subscription_service(req.provider)
 
-    if req.operation == SubscriptionOperation.PAUSE:
-        after = await service.pause(req.subscription_id)
-    elif req.operation == SubscriptionOperation.SKIP:
-        after = await service.skip(req.subscription_id)
-    elif req.operation == SubscriptionOperation.CANCEL:
-        after = await service.cancel(req.subscription_id, reason=req.reason)
-    elif req.operation == SubscriptionOperation.UPDATE_ADDRESS:
-        if not req.address:
-            raise_unprocessable("update_address requires an `address` object")
-        after = await service.update_address(req.subscription_id, req.address)
-    elif req.operation == SubscriptionOperation.CHANGE_FREQUENCY:
-        freq = req.frequency or {}
-        unit = freq.get("unit")
-        count = freq.get("count")
-        if not unit or count is None:
-            raise_unprocessable(
-                'change_frequency requires frequency = {"unit": "day"|"week"|"month", "count": N}'
-            )
-        try:
-            after = await service.change_frequency(req.subscription_id, str(unit), int(count))
-        except (TypeError, ValueError) as e:
-            raise_unprocessable(f"Invalid frequency: {e}")
-    else:  # pragma: no cover — enum covers all branches above
-        raise_unprocessable(f"Unsupported operation '{req.operation}'")
+    try:
+        if req.operation == SubscriptionOperation.PAUSE:
+            after = await service.pause(req.subscription_id)
+        elif req.operation == SubscriptionOperation.SKIP:
+            after = await service.skip(req.subscription_id)
+        elif req.operation == SubscriptionOperation.CANCEL:
+            after = await service.cancel(req.subscription_id, reason=req.reason)
+        elif req.operation == SubscriptionOperation.UPDATE_ADDRESS:
+            if not req.address:
+                raise_unprocessable("update_address requires an `address` object")
+            after = await service.update_address(req.subscription_id, req.address)
+        elif req.operation == SubscriptionOperation.CHANGE_FREQUENCY:
+            freq = req.frequency or {}
+            unit = freq.get("unit")
+            count = freq.get("count")
+            if not unit or count is None:
+                raise_unprocessable(
+                    'change_frequency requires frequency = {"unit": "day"|"week"|"month", "count": N}'
+                )
+            try:
+                after = await service.change_frequency(req.subscription_id, str(unit), int(count))
+            except (TypeError, ValueError) as e:
+                raise_unprocessable(f"Invalid frequency: {e}")
+        else:  # pragma: no cover - enum covers all branches above
+            raise_unprocessable(f"Unsupported operation '{req.operation}'")
+    except SubscriptionError as e:
+        # Not-configured (409), not-found (404), invalid-state guards (409) and
+        # provider failures (502) are all auditable outcomes, not 500s — record
+        # the failed attempt, then map to the error class's documented code.
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id="",
+            action=audit_action,
+            request=audit_request,
+            status="failed",
+            error=str(e),
+        )
+        raise APIError(code=e.code, message=str(e), status=e.status, details=e.details) from e
 
     response_payload = {
         "subscription": after.model_dump(exclude={"raw"}),
@@ -1139,6 +1181,42 @@ async def approve_subscription_action(
 # ── Return labels (ShipEngine) ─────────────────────────────
 
 
+def _store_return_window_days() -> int | None:
+    """Per-store RETURN_WINDOW_DAYS override (agency mode), else process default."""
+    from agent.returns import current_return_window_days
+
+    return current_return_window_days()
+
+
+def _return_customer_address(order: dict) -> dict[str, str]:
+    """Ship-from address for a prepaid return: the customer, taken from the
+    order's shipping address (billing as fallback)."""
+    shipping = order.get("shipping_address") or order.get("billing_address") or {}
+    return {
+        "name": " ".join(filter(None, [shipping.get("first_name"), shipping.get("last_name")]))
+        or (order.get("customer") or {}).get("first_name")
+        or "Customer",
+        "address1": shipping.get("address1"),
+        "address2": shipping.get("address2"),
+        "city": shipping.get("city"),
+        "state": shipping.get("province") or shipping.get("state"),
+        "zip": shipping.get("zip"),
+        "country": shipping.get("country"),
+        "phone": shipping.get("phone"),
+    }
+
+
+def _require_return_address(order: dict) -> dict[str, str]:
+    address = _return_customer_address(order)
+    if not (address.get("address1") and address.get("city")):
+        raise APIError(
+            code="NO_SHIPPING_ADDRESS",
+            message="Order has no shipping address — cannot build a return shipment",
+            status=409,
+        )
+    return address
+
+
 @router.get("/tickets/{ticket_id}/return-eligibility")
 async def get_return_eligibility(ticket_id: str):
     """Whether a prepaid return label can be created for this ticket's order,
@@ -1162,7 +1240,7 @@ async def get_return_eligibility(ticket_id: str):
         if order is None and shopify_error is None:
             shopify_error = f"Order '{order_id}' not found"
 
-    eligibility = evaluate_return_eligibility(order)
+    eligibility = evaluate_return_eligibility(order, window_days=_store_return_window_days())
     if shopify_error:
         eligibility = {**eligibility, "eligible": False, "reason": shopify_error}
 
@@ -1175,6 +1253,79 @@ async def get_return_eligibility(ticket_id: str):
             "configured": configured,
             "missing_settings": missing_fields,
         },
+    }
+
+
+@router.get("/tickets/{ticket_id}/return-rates")
+async def get_return_rates(ticket_id: str):
+    """Live carrier rates for this ticket's prepaid return — the cost the human
+    approves BEFORE any money moves. Re-validates eligibility + configuration
+    server-side; the dashboard then purchases the chosen rate via
+    POST .../actions/return-label with `rate_id`."""
+    row = await store.get(ticket_id)
+    if not row:
+        raise_not_found("ticket", ticket_id)
+    order_id = row["ticket"].get("order_id")
+    if not order_id:
+        raise APIError(
+            code="NO_ORDER_LINKED",
+            message="Ticket has no linked order_id — look up the order first",
+            status=400,
+        )
+
+    shipengine = ShipEngineClient()
+    if not shipengine.enabled:
+        raise_not_configured("ShipEngine")
+    configured, missing_fields = shipengine.configured
+    if not configured:
+        raise APIError(
+            code="RETURN_ADDRESS_MISSING",
+            message=f"Return address settings incomplete: {', '.join(missing_fields)}",
+            status=409,
+            details={"missing_settings": missing_fields},
+        )
+
+    try:
+        order = await _agent.shopify.get_order_by_id(order_id)
+    except ShopifyNotConfigured:
+        raise_not_configured("Shopify")
+    if not order:
+        raise_not_found("order", order_id)
+
+    eligibility = evaluate_return_eligibility(order, window_days=_store_return_window_days())
+    if not eligibility["eligible"]:
+        raise APIError(
+            code="RETURN_NOT_ELIGIBLE",
+            message=str(eligibility["reason"]),
+            status=409,
+            details={"reason": eligibility["reason"], "window_days": eligibility["window_days"]},
+        )
+
+    address = _require_return_address(order)
+    rates = await shipengine.get_rates(address)
+    if not rates:
+        raise APIError(
+            code="NO_RATES_AVAILABLE",
+            message="No carrier rates available for this return shipment",
+            status=422,
+        )
+    out = []
+    for r in rates:
+        ship_rate = r.get("ship_rate") or {}
+        out.append(
+            {
+                "rate_id": r.get("rate_id"),
+                "carrier": r.get("carrier_friendly_name") or r.get("carrier_id"),
+                "service": r.get("service_type") or r.get("service_code"),
+                "cost_usd": float(ship_rate.get("amount") or 0),
+                "currency": ship_rate.get("currency") or "USD",
+            }
+        )
+    return {
+        "ticket_id": ticket_id,
+        "order_id": order_id,
+        "rates": out,
+        "cheapest_rate_id": out[0]["rate_id"],
     }
 
 
@@ -1219,6 +1370,7 @@ async def approve_return_label(
             "error": existing["error"],
             "replayed": True,
         }
+    await _reject_cross_family_key(idempotency_key, "return_label_audit")
 
     row = await store.get(ticket_id)
     if not row:
@@ -1250,7 +1402,7 @@ async def approve_return_label(
     if not order:
         raise_not_found("order", order_id)
 
-    eligibility = evaluate_return_eligibility(order)
+    eligibility = evaluate_return_eligibility(order, window_days=_store_return_window_days())
     if not eligibility["eligible"]:
         raise APIError(
             code="RETURN_NOT_ELIGIBLE",
@@ -1260,24 +1412,7 @@ async def approve_return_label(
         )
 
     # Prepaid return: FROM the customer (order shipping address) TO the store.
-    shipping = order.get("shipping_address") or order.get("billing_address") or {}
-    customer_address = {
-        "name": " ".join(filter(None, [shipping.get("first_name"), shipping.get("last_name")]))
-        or order.get("customer", {}).get("first_name", "Customer"),
-        "address1": shipping.get("address1"),
-        "address2": shipping.get("address2"),
-        "city": shipping.get("city"),
-        "state": shipping.get("province") or shipping.get("state"),
-        "zip": shipping.get("zip"),
-        "country": shipping.get("country"),
-        "phone": shipping.get("phone"),
-    }
-    if not (customer_address.get("address1") and customer_address.get("city")):
-        raise APIError(
-            code="NO_SHIPPING_ADDRESS",
-            message="Order has no shipping address — cannot build a return shipment",
-            status=409,
-        )
+    customer_address = _require_return_address(order)
 
     rma = req.rma_number or f"T-{ticket_id}"
     audit_request = req.model_dump(mode="json")
@@ -1863,22 +1998,85 @@ class StoreCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     shop_domain: str = ""
     shopify_access_token: str | None = None
+    # Per-store integration settings (all optional; secrets are write-only).
+    shipengine_api_key: str | None = None
+    recharge_api_token: str | None = None
+    skio_api_token: str | None = None
+    subscription_provider: str | None = None  # "auto" | "recharge" | "skio"
+    return_address: dict[str, str] | None = None
+    return_window_days: int | None = Field(default=None, ge=0, le=365)  # 0 = use global
 
     @field_validator("shop_domain")
     @classmethod
     def _normalize_domain(cls, v: str) -> str:
         return (v or "").strip().lower()
 
+    @field_validator("subscription_provider")
+    @classmethod
+    def _validate_provider(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        v = v.strip().lower()
+        if v not in ("auto", "recharge", "skio"):
+            raise ValueError("subscription_provider must be auto, recharge, or skio")
+        return v
+
+    @field_validator("return_address")
+    @classmethod
+    def _validate_address(cls, v: dict[str, str] | None) -> dict[str, str] | None:
+        if v is None:
+            return None
+        if not v:
+            return v  # {} = explicit "clear" marker, distinct from omitted (None)
+        cleaned = {k: str(val).strip() for k, val in v.items() if isinstance(val, str)}
+        required = ("name", "address1", "city", "zip")
+        missing = [f for f in required if not cleaned.get(f)]
+        if missing:
+            raise ValueError(f"return_address is missing required fields: {', '.join(missing)}")
+        return cleaned
+
 
 class StoreUpdateRequest(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=120)
     shop_domain: str | None = None
     shopify_access_token: str | None = None
+    # Per-store integration settings: None = unchanged, "" / {} / 0 = clear
+    # (fall back to process env / global default). Secrets are never echoed back.
+    shipengine_api_key: str | None = None
+    recharge_api_token: str | None = None
+    skio_api_token: str | None = None
+    subscription_provider: str | None = None
+    return_address: dict[str, str] | None = None
+    return_window_days: int | None = Field(default=None, ge=0, le=365)
 
     @field_validator("shop_domain")
     @classmethod
     def _normalize_domain(cls, v: str | None) -> str | None:
         return v.strip().lower() if v is not None else None
+
+    @field_validator("subscription_provider")
+    @classmethod
+    def _validate_provider(cls, v: str | None) -> str | None:
+        if v is None or v == "":
+            return v
+        v = v.strip().lower()
+        if v not in ("auto", "recharge", "skio"):
+            raise ValueError("subscription_provider must be auto, recharge, or skio")
+        return v
+
+    @field_validator("return_address")
+    @classmethod
+    def _validate_address(cls, v: dict[str, str] | None) -> dict[str, str] | None:
+        if v is None:
+            return None
+        if not v:
+            return v  # {} = explicit "clear" marker, distinct from omitted (None)
+        cleaned = {k: str(val).strip() for k, val in v.items() if isinstance(val, str)}
+        required = ("name", "address1", "city", "zip")
+        missing = [f for f in required if not cleaned.get(f)]
+        if missing:
+            raise ValueError(f"return_address is missing required fields: {', '.join(missing)}")
+        return cleaned
 
 
 async def _find_duplicate_shop_domain(shop_domain: str, exclude_id: str | None = None) -> bool:
@@ -1890,6 +2088,25 @@ async def _find_duplicate_shop_domain(shop_domain: str, exclude_id: str | None =
         if rec["shop_domain"] == shop_domain and rec["id"] != exclude_id:
             return True
     return False
+
+
+def _integration_credentials(
+    req: StoreCreateRequest | StoreUpdateRequest,
+) -> dict[str, str | int | dict | None]:
+    """Merge patch for per-store integration settings. None on a field = leave
+    unchanged; "" / {} / 0 = clear (fall back to process env / global default)."""
+    out: dict[str, str | int | dict | None] = {}
+    for field in ("shipengine_api_key", "recharge_api_token", "skio_api_token"):
+        value = getattr(req, field)
+        if value is not None:
+            out[field] = value.strip() or None
+    if req.subscription_provider is not None:
+        out["subscription_provider"] = req.subscription_provider or None
+    if req.return_address is not None:
+        out["return_address"] = req.return_address or None
+    if req.return_window_days is not None:
+        out["return_window_days"] = req.return_window_days or None
+    return out
 
 
 @router.get("/stores")
@@ -1913,6 +2130,7 @@ async def create_store_endpoint(req: StoreCreateRequest):
     credentials = {}
     if req.shopify_access_token:
         credentials["shopify_access_token"] = req.shopify_access_token
+    credentials.update({k: v for k, v in _integration_credentials(req).items() if v is not None})
     rec = await create_store(req.name, shop_domain=req.shop_domain, credentials=credentials)
     return {"store": public_store(rec)}
 
@@ -1941,6 +2159,7 @@ async def update_store_endpoint(store_id: str, req: StoreUpdateRequest):
     if req.shopify_access_token is not None:
         # None value on a credential key means "remove"; empty string clears it.
         credentials["shopify_access_token"] = req.shopify_access_token or None
+    credentials.update(_integration_credentials(req))
     rec = await update_store(
         store_id,
         name=req.name,

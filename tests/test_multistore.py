@@ -348,3 +348,224 @@ def test_store_db_path_is_sibling_of_primary_db(tmp_path, monkeypatch):
     per_store = Path(multistore.store_db_path("abc123"))
     assert per_store.parent == tmp_path
     assert per_store.name == "cs_store_abc123.db"
+
+
+# --- Per-store integration settings (return labels / subscriptions) ---
+
+_SETTINGS_PAYLOAD = {
+    "shipengine_api_key": "se_secret_value",
+    "recharge_api_token": "rc_secret_value",
+    "skio_api_token": "sk_secret_value",
+    "subscription_provider": "recharge",
+    "return_address": {
+        "name": "Returns Desk",
+        "address1": "1 Main St",
+        "city": "Austin",
+        "state": "TX",
+        "zip": "78701",
+        "country": "US",
+    },
+    "return_window_days": 14,
+}
+
+
+def test_store_integration_settings_create_redaction_and_clear(client):
+    c, _cs = client
+    r = c.post("/support/stores", headers=AUTH, json={"name": "Agency", **_SETTINGS_PAYLOAD})
+    assert r.status_code == 201, r.text
+    store = r.json()["store"]
+    assert store["has_shipengine_token"] is True
+    assert store["has_recharge_token"] is True
+    assert store["has_skio_token"] is True
+    assert store["subscription_provider"] == "recharge"
+    assert store["return_window_days"] == 14
+    assert store["return_address"]["city"] == "Austin"
+    # Secrets are never echoed, in any registry view.
+    for secret in ("se_secret_value", "rc_secret_value", "sk_secret_value"):
+        assert secret not in r.text
+        assert secret not in c.get("/support/stores", headers=AUTH).text
+
+    sid = store["id"]
+    cleared = c.patch(
+        f"/support/stores/{sid}",
+        headers=AUTH,
+        json={
+            "shipengine_api_key": "",
+            "recharge_api_token": "",
+            "return_window_days": 0,
+            "return_address": {},
+        },
+    )
+    assert cleared.status_code == 200, cleared.text
+    body = cleared.json()["store"]
+    assert body["has_shipengine_token"] is False
+    assert body["has_recharge_token"] is False
+    assert "return_window_days" not in body
+    assert "return_address" not in body
+    # Untouched fields survive the patch.
+    assert body["has_skio_token"] is True
+
+
+def test_store_integration_settings_validation(client):
+    c, _cs = client
+    r = c.post(
+        "/support/stores",
+        headers=AUTH,
+        json={"name": "Bad", "subscription_provider": "bold"},
+    )
+    assert r.status_code == 422
+
+    r2 = c.post(
+        "/support/stores",
+        headers=AUTH,
+        json={"name": "Bad2", "return_address": {"name": "X", "city": "Y"}},
+    )
+    assert r2.status_code == 422
+    assert "missing required fields" in r2.text
+
+    r3 = c.post(
+        "/support/stores",
+        headers=AUTH,
+        json={"name": "Bad3", "return_window_days": 999},
+    )
+    assert r3.status_code == 422
+
+
+def test_integration_overrides_none_outside_store_scope():
+    from agent.multistore import integration_overrides
+
+    assert integration_overrides() is None
+
+    multistore._store_records["ov1"] = {"credentials": {"return_window_days": 5}}
+    token = multistore.current_store_id.set("ov1")
+    try:
+        assert integration_overrides() == {"return_window_days": 5}
+    finally:
+        multistore.current_store_id.reset(token)
+        multistore._store_records.pop("ov1", None)
+    assert integration_overrides() is None
+
+
+def test_shipengine_client_store_scope_has_no_env_fallback(monkeypatch):
+    from integrations.shipengine import ShipEngineClient
+
+    monkeypatch.setattr(settings, "SHIPENGINE_API_KEY", SecretStr("env-key"))
+    monkeypatch.setattr(settings, "RETURN_ADDRESS_NAME", "Env Desk")
+    monkeypatch.setattr(settings, "RETURN_ADDRESS1", "2 Env Way")
+    monkeypatch.setattr(settings, "RETURN_CITY", "Denver")
+    monkeypatch.setattr(settings, "RETURN_ZIP", "80201")
+
+    # Outside store scope: env config applies.
+    outside = ShipEngineClient()
+    assert outside.enabled is True
+    assert outside.configured == (True, [])
+
+    # Inside a store scope with no ShipEngine key: DISABLED despite the env key
+    # (one tenant's carrier account must never serve another tenant).
+    multistore._store_records["se1"] = {"credentials": {}}
+    token = multistore.current_store_id.set("se1")
+    try:
+        scoped = ShipEngineClient()
+        assert scoped.enabled is False
+        assert scoped.configured == (False, ["SHIPENGINE_API_KEY"])
+    finally:
+        multistore.current_store_id.reset(token)
+        multistore._store_records.pop("se1", None)
+
+    # Store-provided key + address wins inside its scope.
+    multistore._store_records["se2"] = {
+        "credentials": {
+            "shipengine_api_key": "store-key",
+            "return_address": {
+                "name": "Store Returns",
+                "address1": "9 Store Rd",
+                "city": "Miami",
+                "zip": "33101",
+                "country": "US",
+            },
+        }
+    }
+    token = multistore.current_store_id.set("se2")
+    try:
+        scoped = ShipEngineClient()
+        assert scoped.enabled is True
+        assert scoped.configured == (True, [])
+        assert scoped._api_key() == "store-key"
+        assert scoped._address_field("address1") == "9 Store Rd"
+    finally:
+        multistore.current_store_id.reset(token)
+        multistore._store_records.pop("se2", None)
+
+
+def test_per_store_return_window_applies_through_endpoint(client):
+    """Full chain: store settings -> X-Store-Id request -> eligibility window."""
+    from datetime import UTC, datetime, timedelta
+
+    from tests.conftest import FakeResponseEngine
+
+    c, _cs = client
+    r = c.post(
+        "/support/stores",
+        headers=AUTH,
+        json={"name": "Short Window", "return_window_days": 3},
+    )
+    assert r.status_code == 201, r.text
+    sid = r.json()["store"]["id"]
+    hdrs = {**AUTH, "X-Store-Id": sid}
+
+    # Warm the per-store context, then fake its agent (no LLM calls).
+    assert c.get("/support/tickets", headers=hdrs).status_code == 200
+    store_agent = multistore._agents[sid]
+    store_agent.classifier = FakeClassifier()
+    store_agent.response_engine = FakeResponseEngine()
+
+    class _OrderShopify:
+        enabled = True
+        order = None
+
+        async def get_order_by_id(self, order_id):
+            return self.order
+
+        async def get_order_by_number(self, order_number):
+            return self.order
+
+        async def summarize_order(self, order):
+            return "order summary"
+
+    store_agent.shopify = _OrderShopify()
+    store_agent.shopify.order = {
+        "id": "ord-win",
+        "created_at": (datetime.now(UTC) - timedelta(days=5)).isoformat(),
+        "financial_status": "paid",
+        "fulfillment_status": "fulfilled",
+        "line_items": [{"id": 1, "title": "Mug", "quantity": 1}],
+        "shipping_address": {
+            "first_name": "A",
+            "last_name": "B",
+            "address1": "1 Customer St",
+            "city": "Portland",
+            "zip": "97201",
+            "country": "US",
+        },
+    }
+
+    created = c.post("/support/tickets", headers=hdrs, json=_ticket_payload("returner"))
+    assert created.status_code == 200, created.text
+    ticket_id = created.json()["ticket_id"]
+
+    ts = TicketStore(db_path=multistore.store_db_path(sid))
+    import asyncio
+
+    asyncio.run(ts.update_status(ticket_id, order_id="ord-win"))
+
+    # 5-day-old order vs the store's 3-day window -> expired, store window shown.
+    elig = c.get(f"/support/tickets/{ticket_id}/return-eligibility", headers=hdrs)
+    assert elig.status_code == 200, elig.text
+    body = elig.json()
+    assert body["window_days"] == 3
+    assert body["eligible"] is False
+    assert "expired" in body["reason"]
+
+    # The same order under the deployment default (30 days) would be eligible.
+    default = c.get(f"/support/tickets/{ticket_id}/return-eligibility", headers=AUTH)
+    assert default.status_code == 404  # ticket lives in the store's DB, not primary

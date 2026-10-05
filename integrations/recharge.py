@@ -60,11 +60,23 @@ class RechargeClient:
     provider_name = "recharge"
     BASE_URL = "https://api.rechargeapps.com"
 
-    def __init__(self):
-        self.enabled = bool(settings.RECHARGE_API_TOKEN)
+    def __init__(self, api_token: str | None = None):
+        # None = process env (single-store / outside a request); a string =
+        # store-scoped token from the registry ("" disables the client — agency
+        # mode never falls back to another tenant's env token).
+        if api_token is None:
+            self.enabled = bool(settings.RECHARGE_API_TOKEN)
+            token = (
+                settings.RECHARGE_API_TOKEN.get_secret_value()
+                if settings.RECHARGE_API_TOKEN
+                else ""
+            )
+        else:
+            token = str(api_token).strip()
+            self.enabled = bool(token)
         if self.enabled:
             self.headers = {
-                "X-Recharge-Access-Token": settings.RECHARGE_API_TOKEN.get_secret_value(),
+                "X-Recharge-Access-Token": token,
                 "Content-Type": "application/json",
             }
 

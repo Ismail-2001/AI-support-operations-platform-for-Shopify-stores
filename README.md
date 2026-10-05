@@ -11,7 +11,7 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-337%20Python%20%7C%20117%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
+[![Tests](https://img.shields.io/badge/Tests-370%20Python%20%7C%20125%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -85,7 +85,7 @@ One-click sync: `POST /support/knowledge-base/sync-shopify` — **incremental**:
 - **PII redaction** — emails and phone numbers masked before LLM calls
 - **Webhook body size limit** — 1 MB cap prevents memory exhaustion
 
-> 🛡️ **Proven, not promised:** [sales/SAFETY_PROOF.md](sales/SAFETY_PROOF.md) walks through four real cases from the eval harness — prompt injection forcing a $500 refund, a knowledge-base gap, an angry customer, and an order-status lookup — with the agent's actual outputs. The dataset now spans 23 golden cases (15/15 last full run; 4 new action-suggestion + 4 subscription cases harness-verified).
+> 🛡️ **Proven, not promised:** [sales/SAFETY_PROOF.md](sales/SAFETY_PROOF.md) walks through four real cases from the eval harness — prompt injection forcing a $500 refund, a knowledge-base gap, an angry customer, and an order-status lookup — with the agent's actual outputs. The dataset now spans 30 golden cases (15/15 last full run; the action-suggestion, subscription, return-label, and adversarial cases are harness-verified).
 
 ### Self-Improvement Analytics
 
@@ -129,11 +129,11 @@ Pause, skip, cancel, change delivery frequency, or fix a subscription's shipping
 
 ### Return Labels (ShipEngine)
 
-Returns get a policy eligibility check (refund state, fulfillment, return window, line items) plus a one-click ShipEngine return label: rates are fetched, the cheapest is bought with `is_return_label: true`, and the tracking number + PDF land on the ticket — which moves to `awaiting_customer` and gets tagged in Shopify. Missing ShipEngine or return-address config surfaces an explicit error instead of a silent failure. *Why ShipEngine over EasyPost: a first-class return-label flag on label purchase and rating + buying in one API, isolated behind `integrations/shipengine.py` so another provider can be swapped in without touching the endpoint.*
+Returns get a policy eligibility check (refund state, fulfillment, return window, line items) plus a one-click ShipEngine return label: **live carrier rates are shown in the approval panel before anything is bought** (the operator picks a rate, defaulting to the cheapest, and sees the exact cost), then the chosen rate is purchased with `is_return_label: true`, and the tracking number + PDF land on the ticket — which moves to `awaiting_customer` and gets tagged in Shopify. Missing ShipEngine or return-address config surfaces an explicit error instead of a silent failure, and a definitively empty rate list blocks approval up front. *Why ShipEngine over EasyPost: a first-class return-label flag on label purchase and rating + buying in one API, isolated behind `integrations/shipengine.py` so another provider can be swapped in without touching the endpoint.*
 
 ### Multi-Store / Agency Mode
 
-Requests carrying an `X-Store-Id` header resolve tickets, knowledge, audits, and the agent's Shopify credentials to that store's own database file and registry entry, while `/support/stores` stays a global admin surface (credentials write-only). The dashboard ships a **Stores** page (register stores, attach shop tokens, delete) and a sidebar store switcher — switching remounts the workspace in the new context. No header = default store, so single-store deployments behave exactly as before.
+Requests carrying an `X-Store-Id` header resolve tickets, knowledge, audits, and the agent's Shopify credentials to that store's own database file and registry entry, while `/support/stores` stays a global admin surface (credentials write-only). Integration settings — ShipEngine key, Recharge/Skio tokens, subscription provider, return address, return window — live **per store** in the registry; env vars only apply outside store scope, so a store never falls back to another tenant's secrets. The dashboard ships a **Stores** page (register stores, attach shop tokens, configure integrations, delete) and a sidebar store switcher — switching remounts the workspace in the new context. No header = default store, so single-store deployments behave exactly as before.
 
 <details>
 <summary><b>Competitive Advantages — Why This Beats Generic Chatbots</b></summary>
@@ -146,7 +146,7 @@ Requests carrying an `X-Store-Id` header resolve tickets, knowledge, audits, and
 | **Human-before-money actions** | Hard-coded | Prompt-only | Yes | Yes |
 | **Cost cap circuit breaker** | Built-in | — | — | — |
 | **Self-improvement analytics** | Edit-rate by category | — | — | — |
-| **Prompt injection eval harness** | 23 cases + adversarial | — | — | — |
+| **Prompt injection eval harness** | 30 cases + adversarial | — | — | — |
 | **Knowledge base (RAG)** | Local SQLite (zero infra) | — | Yes | — |
 | **Open-source / self-hosted** | Full code | SaaS only | — | — |
 | **Pricing** | One-time setup + $0/mo | $0-$1000/mo | $55+/mo | $360+/mo |
@@ -301,7 +301,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 337 Python + 117 frontend tests |
+| **Testing** | Pytest + Vitest | 370 Python + 125 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -430,6 +430,7 @@ Dashboard: **http://localhost:5173**
 | `RETURN_PACKAGE_*` | No | Label package dims: `WEIGHT_OZ`, `LENGTH_IN`, `WIDTH_IN`, `HEIGHT_IN` |
 
 † *Without ShipEngine/return-address config, subscription and return endpoints answer honestly (`configured: false` / `RETURN_ADDRESS_MISSING`) instead of failing mid-action.*
+† *With `X-Store-Id` in play these same settings can be overridden per store in the registry (`POST`/`PATCH /support/stores`) - in store scope, secrets (API keys/tokens) never fall back to env vars, so one tenant can't use another's credentials.*
 
 ### Safety Gates
 
@@ -481,6 +482,7 @@ Dashboard: **http://localhost:5173**
 | `POST` | `/support/tickets/{id}/actions/subscription` | Pause/skip/cancel/update address/change frequency via Recharge or Skio. Requires `Idempotency-Key`. Audited per operation. |
 | `GET` | `/support/tickets/{id}/subscriptions` | Normalized subscription list for the ticket's customer (`configured: false` when unconnected) |
 | `GET` | `/support/tickets/{id}/return-eligibility` | Return policy check: window, refund state, line items |
+| `GET` | `/support/tickets/{id}/return-rates` | Live ShipEngine carrier rates for the ticket's order, cheapest first - the approval panel shows the exact cost before any purchase (422 `NO_RATES_AVAILABLE` when the route has none) |
 | `POST` | `/support/tickets/{id}/actions/return-label` | Buy a ShipEngine return label (cheapest rate). Requires `Idempotency-Key`. |
 
 ### Multi-Store Registry
@@ -492,7 +494,7 @@ Global admin surface — these endpoints ignore any `X-Store-Id` on the request,
 | `GET` | `/support/stores` | List registered stores |
 | `POST` | `/support/stores` | Register a store (`name`, optional `shop_domain`, `shopify_access_token`) — 409 on duplicate domain |
 | `GET` | `/support/stores/{id}` | Store detail |
-| `PATCH` | `/support/stores/{id}` | Rename / attach or clear the Shopify token (invalidates the cached store context) |
+| `PATCH` | `/support/stores/{id}` | Rename / attach or clear the Shopify token, or set per-store integration settings (`shipengine_api_key`, `recharge_api_token`, `skio_api_token`, `subscription_provider`, `return_address`, `return_window_days` - send `""`/`{}`/`0` to clear) (invalidates the cached store context) |
 | `DELETE` | `/support/stores/{id}` | Unregister a store (per-store data file is kept on disk — no silent data destruction) |
 
 Any other endpoint called with `X-Store-Id: <id>` operates inside that store's isolated database; an unknown id returns `404 STORE_NOT_FOUND`.
@@ -630,12 +632,12 @@ npm run test:watch    # Watch mode
 npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-117 tests across 15 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar (including the store switcher), ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), the two action-approval panels (cancel, edit address, partial refund with line-item scoping), the subscription and return-label approval panels, the Stores page, and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
+125 tests across 15 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar (including the store switcher), ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), the two action-approval panels (cancel, edit address, partial refund with line-item scoping), the subscription approval panel (including current-vs-proposed diffs per operation), the return-label approval panel (live carrier rates with cost shown before approval), the Stores page, and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
 
 ### Eval Harness
 
 ```bash
-# Run all 23 golden cases against your configured LLM
+# Run all 30 golden cases against your configured LLM
 python -m evals.run_evals
 
 # Run a single case
@@ -646,7 +648,11 @@ python -m evals.run_evals --json report.json
 python -m evals.compare evals/results/previous.json report.json
 ```
 
-The eval dataset includes **2 adversarial prompt-injection cases** that verify the model doesn't get tricked into confirming fake refunds or overriding confidence scores, 4 action-suggestion cases (cancel / edit address / partial refund / delivered-order-must-not-cancel) asserting the model proposes the right `expected_action_type` and never claims an action already happened, and 4 subscription cases asserting the model proposes the right `expected_action_operation` (pause vs skip), routes card updates to the portal with no action, and stays honest when subscription data is unavailable.
+The eval dataset includes **2 adversarial prompt-injection cases** that verify the model doesn't get tricked into confirming fake refunds or overriding confidence scores, 4 action-suggestion cases (cancel / edit address / partial refund / delivered-order-must-not-cancel) asserting the model proposes the right `expected_action_type` and never claims an action already happened, plus edge cases (oversized refund demand, already-cancelled order, address change after shipment) that must never claim money moved, 7 subscription cases covering all five `expected_action_operation` values (pause / skip / cancel / change frequency / update address), the portal-only payment-method route, and honesty when subscription data is unavailable, and a return-label case proving eligibility context is forwarded into the prompt (`return_context` fixture) before the model proposes `return_label`. The dataset's shape itself is enforced by `tests/test_golden_dataset.py` (unique ids, valid enums, fixtures present) and the fixture wiring is proven by tests that run `run_case` with fakes.
+
+### Real-Store Verification
+
+The unit suite proves the logic with fakes; money-touching integrations are proven manually against a real Shopify development store. [`REAL_STORE_VERIFICATION.md`](REAL_STORE_VERIFICATION.md) is the step-by-step runbook (order actions, all five subscription operations, ShipEngine label purchase with cost checks, per-store isolation, safety gates) with explicit pass criteria - run it before trusting the agent with a paying client.
 
 ### CI Pipeline
 
@@ -721,12 +727,12 @@ cs-agent/
 │       └── lib/                # API client (X-Store-Id header), ThemeProvider, types
 │
 ├── evals/                      # Golden-dataset evaluation framework
-│   ├── golden_dataset.json     # 23 labeled test cases
-│   ├── run_evals.py            # Eval runner (per-case subscription context)
+│   ├── golden_dataset.json     # 30 labeled test cases
+│   ├── run_evals.py            # Eval runner (per-case subscription + return context fixtures)
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
-├── tests/                      # 337 unit/integration tests
+├── tests/                      # 370 unit/integration tests
 │   ├── conftest.py             # Fixtures: temp DB, FakeClassifier, FakeShopify
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests
@@ -734,7 +740,7 @@ cs-agent/
 │   ├── test_subscriptions.py   # Recharge/Skio clients + action endpoints
 │   ├── test_returns.py         # Return eligibility + ShipEngine label endpoints
 │   ├── test_multistore.py      # Store registry, X-Store-Id isolation, proxies
-│   └── ...                     # 22 test files covering every module
+│   └── ...                     # 23 test files covering every module
 │
 ├── sales/                      # Sales collateral (Loom script, founding offer, safety proof)
 │

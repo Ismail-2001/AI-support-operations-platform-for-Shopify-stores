@@ -12,6 +12,7 @@ Invariants proven here:
 import os
 import sys
 from datetime import UTC, datetime, timedelta
+from typing import ClassVar
 
 import pytest
 from fastapi.testclient import TestClient
@@ -102,10 +103,32 @@ class FakeShipEngine:
         return (True, [])
 
     buy_calls = 0
+    rate_calls = 0
+    last_rate_id = None
+    # Raw ShipEngine /rates shape, cheapest first (the real client sorts).
+    rates: ClassVar[list[dict]] = [
+        {
+            "rate_id": "rate-slow",
+            "carrier_friendly_name": "USPS Ground",
+            "service_type": "Parcel Select",
+            "ship_rate": {"amount": 4.35, "currency": "USD"},
+        },
+        {
+            "rate_id": "rate-fast",
+            "carrier_friendly_name": "UPS",
+            "service_type": "2nd Day Air",
+            "ship_rate": {"amount": 9.1, "currency": "USD"},
+        },
+    ]
+
+    async def get_rates(self, customer_address):
+        type(self).rate_calls += 1
+        return list(type(self).rates)
 
     async def quote_and_buy(self, customer_address, rma_number=None, rate_id=None):
         type(self).buy_calls += 1
         type(self).last_address = customer_address
+        type(self).last_rate_id = rate_id
         return {
             "label_id": "L-1",
             "label_url": "https://labels.example/L-1.pdf",
@@ -131,11 +154,13 @@ class FakeShipEngineDisabled:
 class FakeShopifyReturns:
     enabled = True
     order = None
+    tags: ClassVar[list] = []
 
     async def get_order_by_id(self, order_id):
         return self.order
 
     async def tag_order(self, order_id, tag):
+        type(self).tags.append((order_id, tag))
         return {"id": order_id, "tagged": tag}
 
 
@@ -173,6 +198,9 @@ def client(tmp_path, monkeypatch):
     cs_module._agent.response_engine = FakeResponseEngine()
     cs_module._agent.shopify = FakeShopifyReturns()
     FakeShipEngine.buy_calls = 0
+    FakeShipEngine.rate_calls = 0
+    FakeShipEngine.last_rate_id = None
+    FakeShopifyReturns.tags = []
 
     with TestClient(main_module.app, raise_server_exceptions=False) as c:
         yield c, cs_module
@@ -351,3 +379,149 @@ def test_return_label_provider_failure_is_recorded(client):
     assert audit is not None
     assert audit["status"] == "failed"
     assert "carrier down" in audit["error"]
+
+
+# ── Cost visibility before approval (rates endpoint) ─────────────────
+
+
+def test_return_rates_endpoint_shows_cost_before_purchase(client):
+    c, cs_module = client
+    order = _order()
+    ticket_id = _create_ticket_with_order(c, order)
+    cs_module._agent.shopify.order = order
+    cs_module.ShipEngineClient = FakeShipEngine
+
+    r = c.get(f"/support/tickets/{ticket_id}/return-rates", headers=AUTH)
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["order_id"] == order["id"]
+    assert [rate["rate_id"] for rate in body["rates"]] == ["rate-slow", "rate-fast"]
+    assert body["rates"][0]["cost_usd"] == 4.35
+    assert body["rates"][0]["carrier"] == "USPS Ground"
+    assert body["cheapest_rate_id"] == "rate-slow"
+    # Quoting never buys anything.
+    assert FakeShipEngine.buy_calls == 0
+
+    # The approved rate is what gets purchased.
+    r2 = c.post(
+        f"/support/tickets/{ticket_id}/actions/return-label",
+        headers={**AUTH, "Idempotency-Key": "rl-rate"},
+        json={"rate_id": "rate-fast"},
+    )
+    assert r2.status_code == 200, r2.text
+    assert FakeShipEngine.last_rate_id == "rate-fast"
+    assert FakeShipEngine.buy_calls == 1
+
+
+def test_return_rates_unconfigured_shipengine_400(client):
+    c, cs_module = client
+    ticket_id = _create_ticket_with_order(c, _order())
+    cs_module._agent.shopify.order = _order()
+    cs_module.ShipEngineClient = FakeShipEngineDisabled
+    r = c.get(f"/support/tickets/{ticket_id}/return-rates", headers=AUTH)
+    assert r.status_code == 400
+    assert r.json()["error"] == "SHIPENGINE_NOT_CONFIGURED"
+
+
+def test_return_rates_ineligible_order_409(client):
+    c, cs_module = client
+    old = _order(created_at=(datetime.now(UTC) - timedelta(days=90)).isoformat())
+    ticket_id = _create_ticket_with_order(c, old)
+    cs_module._agent.shopify.order = old
+    cs_module.ShipEngineClient = FakeShipEngine
+    r = c.get(f"/support/tickets/{ticket_id}/return-rates", headers=AUTH)
+    assert r.status_code == 409
+    assert r.json()["error"] == "RETURN_NOT_ELIGIBLE"
+    assert FakeShipEngine.rate_calls == 0
+
+
+def test_return_rates_requires_linked_order_400(client):
+    c, cs_module = client
+    ticket_id = _create_ticket_with_order(c, None)
+    cs_module.ShipEngineClient = FakeShipEngine
+    r = c.get(f"/support/tickets/{ticket_id}/return-rates", headers=AUTH)
+    assert r.status_code == 400
+    assert r.json()["error"] == "NO_ORDER_LINKED"
+
+
+def test_return_rates_no_carrier_rates_422(client):
+    c, cs_module = client
+    order = _order()
+    ticket_id = _create_ticket_with_order(c, order)
+    cs_module._agent.shopify.order = order
+
+    class NoRates(FakeShipEngine):
+        rates: ClassVar[list] = []
+
+    cs_module.ShipEngineClient = NoRates
+    r = c.get(f"/support/tickets/{ticket_id}/return-rates", headers=AUTH)
+    assert r.status_code == 422
+    assert r.json()["error"] == "NO_RATES_AVAILABLE"
+
+
+# ── Shopify marking + per-store window resolution ────────────────────
+
+
+def test_return_label_key_cannot_be_reused_for_refund(client):
+    c, cs_module = client
+    order = _order()
+    ticket_id = _create_ticket_with_order(c, order)
+    cs_module._agent.shopify.order = order
+    cs_module.ShipEngineClient = FakeShipEngine
+
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/return-label",
+        headers={**AUTH, "Idempotency-Key": "shared-rl"},
+        json={},
+    )
+    assert r.status_code == 200, r.text
+
+    r2 = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund",
+        headers={**AUTH, "Idempotency-Key": "shared-rl"},
+        json={"amount": 1.0},
+    )
+    assert r2.status_code == 409
+    assert r2.json()["error"] == "IDEMPOTENCY_KEY_CONFLICT"
+    assert r2.json()["details"]["table"] == "return_label_audit"
+
+
+def test_return_label_tags_order_in_shopify_after_purchase(client):
+    c, cs_module = client
+    order = _order()
+    ticket_id = _create_ticket_with_order(c, order)
+    cs_module._agent.shopify.order = order
+    cs_module.ShipEngineClient = FakeShipEngine
+
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/return-label",
+        headers={**AUTH, "Idempotency-Key": "rl-tag"},
+        json={},
+    )
+    assert r.status_code == 200, r.text
+    assert FakeShopifyReturns.tags == [(order["id"], "return-label-created")]
+
+
+def test_current_return_window_days_uses_store_override():
+    from agent import multistore
+    from agent.returns import current_return_window_days
+
+    # No store scope -> None (evaluate_return_eligibility uses the env default).
+    assert current_return_window_days() is None
+
+    multistore._store_records["win-store"] = {"credentials": {"return_window_days": 7}}
+    token = multistore.current_store_id.set("win-store")
+    try:
+        assert current_return_window_days() == 7
+    finally:
+        multistore.current_store_id.reset(token)
+        multistore._store_records.pop("win-store", None)
+
+    # Garbage in the registry falls back to the default instead of crashing.
+    multistore._store_records["win-bad"] = {"credentials": {"return_window_days": "soon"}}
+    token = multistore.current_store_id.set("win-bad")
+    try:
+        assert current_return_window_days() is None
+    finally:
+        multistore.current_store_id.reset(token)
+        multistore._store_records.pop("win-bad", None)

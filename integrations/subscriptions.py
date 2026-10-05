@@ -90,20 +90,47 @@ def _norm_frequency(unit: Any, count: Any) -> tuple[str | None, int | None]:
 
 
 class SubscriptionService:
-    """Facade: picks the configured provider and applies shared state guards."""
+    """Facade: picks the configured provider and applies shared state guards.
+
+    Provider + tokens resolve per store when a request carries X-Store-Id (agency
+    mode): store tokens only, never another tenant's env token. Outside a store
+    scope the process env is used, exactly as before."""
 
     def __init__(self, provider: str | None = None):
-        self.requested = (provider or settings.SUBSCRIPTION_PROVIDER or "auto").lower()
+        from agent.multistore import integration_overrides
+
+        self._overrides = integration_overrides() or {}
+        if provider:
+            self.requested = provider.lower()
+        elif self._overrides.get("subscription_provider"):
+            self.requested = str(self._overrides["subscription_provider"]).lower()
+        else:
+            self.requested = (settings.SUBSCRIPTION_PROVIDER or "auto").lower()
         self._client: Any = None
         self.provider: ProviderName | None = None
         self._resolve()
+
+    @property
+    def _store_scoped(self) -> bool:
+        # integration_overrides() returns None outside a store-scoped request;
+        # an empty dict means "this store configures nothing itself".
+        from agent.multistore import integration_overrides
+
+        return integration_overrides() is not None
 
     def _resolve(self) -> None:
         from integrations.recharge import RechargeClient
         from integrations.skio import SkioClient
 
-        recharge = RechargeClient()
-        skio = SkioClient()
+        scoped = self._store_scoped
+        recharge = RechargeClient(
+            api_token=(
+                str(self._overrides.get("recharge_api_token") or "") if scoped else None
+            )
+        )
+        skio = SkioClient(
+            api_token=str(self._overrides.get("skio_api_token") or "") if scoped else None
+        )
         if self.requested == "recharge":
             candidates = [recharge]
         elif self.requested == "skio":
@@ -128,10 +155,17 @@ class SubscriptionService:
         from integrations.recharge import RechargeClient
         from integrations.skio import SkioClient
 
+        scoped = self._store_scoped
         out = []
-        if RechargeClient().enabled:
+        if RechargeClient(
+            api_token=str(self._overrides.get("recharge_api_token") or "")
+            if scoped
+            else None
+        ).enabled:
             out.append("recharge")
-        if SkioClient().enabled:
+        if SkioClient(
+            api_token=str(self._overrides.get("skio_api_token") or "") if scoped else None
+        ).enabled:
             out.append("skio")
         return out
 

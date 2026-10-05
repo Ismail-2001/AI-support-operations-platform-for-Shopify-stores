@@ -124,8 +124,12 @@ integrations work against production credentials:
 5. **Multi-store routing** — `GET /support/stores` returns 200; calling any
    endpoint with `X-Store-Id: bogus` returns `404 STORE_NOT_FOUND` (the smoke
    test now covers both).
+6. **Money actions against a real store** — follow
+   [`REAL_STORE_VERIFICATION.md`](REAL_STORE_VERIFICATION.md) before trusting
+   cancel / edit-address / refund / subscription operations / return-label
+   purchases end-to-end (each section has explicit pass criteria).
 
-Only after all five pass should you consider flipping `AUTO_SEND_ENABLED=true`.
+Only after all six pass should you consider flipping `AUTO_SEND_ENABLED=true`.
 
 ---
 

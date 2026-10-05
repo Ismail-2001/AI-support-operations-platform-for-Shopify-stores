@@ -40,6 +40,7 @@ KB_RELEVANT_CATEGORIES = {
     "subscription",
 }
 SUBSCRIPTION_RELEVANT_CATEGORIES = {"subscription"}
+RETURN_RELEVANT_CATEGORIES = {"returns", "refund"}
 REPEAT_CONTACT_ESCALATION_THRESHOLD = 3
 _PRIORITY_ORDER = [
     TicketPriority.LOW,
@@ -57,10 +58,13 @@ class AgentState(TypedDict):
     classification: ClassificationResult | None
     order_context: str | None
     order_used: bool
+    raw_order: dict | None
     knowledge_context: str | None
     kb_used: bool
     subscription_context: str | None
     subscription_used: bool
+    return_context: str | None
+    return_used: bool
     suggestion: ResponseSuggestion | None
     auto_sent: bool
     dry_run: bool
@@ -142,7 +146,12 @@ def build_agent_graph(classifier, response_engine, shopify):
 
         ticket.order_id = str(order.get("id"))
         context = shopify.summarize_order(order)
-        return {"order_context": context, "order_used": True, "ticket": ticket}
+        return {
+            "order_context": context,
+            "order_used": True,
+            "raw_order": order,
+            "ticket": ticket,
+        }
 
     async def fetch_knowledge_context(state: AgentState) -> dict[str, Any]:
         from agent.knowledge_base import knowledge_base
@@ -238,6 +247,59 @@ def build_agent_graph(classifier, response_engine, shopify):
         block = "Subscriptions for this customer:\n" + "\n".join(lines)
         return {"subscription_context": block, "subscription_used": True}
 
+    async def fetch_return_context(state: AgentState) -> dict[str, Any]:
+        from agent.returns import current_return_window_days, evaluate_return_eligibility
+        from integrations.shipengine import ShipEngineClient
+
+        classification = state["classification"]
+        if classification.category.value not in RETURN_RELEVANT_CATEGORIES:
+            return {"return_context": None, "return_used": False}
+
+        order = state.get("raw_order")
+        if not order:
+            # No order in play (or lookup failed) - the order context already told
+            # the model to ask for the order number; don't invent return state.
+            return {"return_context": None, "return_used": False}
+
+        eligibility = evaluate_return_eligibility(
+            order, window_days=current_return_window_days()
+        )
+        if not eligibility["eligible"]:
+            return {
+                "return_context": (
+                    f"Return context: NOT eligible for a prepaid return label — "
+                    f"{eligibility['reason']}. Do not suggest a return_label action; "
+                    f"explain the situation honestly instead."
+                ),
+                "return_used": True,
+            }
+
+        items = ", ".join(
+            f"{li['title']} x{li['quantity']}"
+            for li in eligibility["line_items"]
+            if li.get("title")
+        )
+        provider_note = ""
+        if not ShipEngineClient().enabled:
+            provider_note = (
+                " NOTE: the return-label provider is not connected yet, so a label "
+                "cannot be purchased right now — set the action anyway so a human "
+                "can see the request and arrange it."
+            )
+        return {
+            "return_context": (
+                f"Return context: ELIGIBLE for a prepaid return label — order placed "
+                f"within the {eligibility['window_days']}-day window (through "
+                f"{eligibility['last_return_date']})."
+                + (f" Eligible items: {items}." if items else "")
+                + provider_note
+                + " If (and only if) the customer asks to return, set suggested_action "
+                "type=return_label with the order_id and return_line_items (omit for "
+                "the full order)."
+            ),
+            "return_used": True,
+        }
+
     async def generate_response(state: AgentState) -> dict[str, Any]:
         suggestion = await response_engine.generate_suggestion(
             state["ticket"],
@@ -245,6 +307,7 @@ def build_agent_graph(classifier, response_engine, shopify):
             order_context=state["order_context"],
             knowledge_context=state["knowledge_context"],
             subscription_context=state.get("subscription_context"),
+            return_context=state.get("return_context"),
             history=state["history"],
         )
         if state["customer_message_count"] >= REPEAT_CONTACT_ESCALATION_THRESHOLD:
@@ -330,6 +393,7 @@ def build_agent_graph(classifier, response_engine, shopify):
         ("fetch_order_context", fetch_order_context),
         ("fetch_knowledge_context", fetch_knowledge_context),
         ("fetch_subscription_context", fetch_subscription_context),
+        ("fetch_return_context", fetch_return_context),
         ("generate_response", generate_response),
         ("decide_auto_send", decide_auto_send),
         ("save_results", save_results),
@@ -344,7 +408,8 @@ def build_agent_graph(classifier, response_engine, shopify):
     workflow.add_edge("apply_escalation", "fetch_order_context")
     workflow.add_edge("fetch_order_context", "fetch_knowledge_context")
     workflow.add_edge("fetch_knowledge_context", "fetch_subscription_context")
-    workflow.add_edge("fetch_subscription_context", "generate_response")
+    workflow.add_edge("fetch_subscription_context", "fetch_return_context")
+    workflow.add_edge("fetch_return_context", "generate_response")
     workflow.add_edge("generate_response", "decide_auto_send")
     workflow.add_edge("decide_auto_send", "save_results")
     workflow.add_edge("save_results", END)

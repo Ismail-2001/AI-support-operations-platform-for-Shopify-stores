@@ -37,6 +37,15 @@ const SUBS: TicketSubscriptions = {
       next_charge_date: "2026-11-01",
       frequency_unit: "month",
       frequency_count: 1,
+      address: {
+        address1: "1 Old St",
+        address2: "Apt 2",
+        city: "Springfield",
+        state: "IL",
+        zip: "62701",
+        country: "US",
+        name: "Jane Doe",
+      },
     },
   ],
 };
@@ -73,7 +82,7 @@ describe("SubscriptionApprovalPanel", () => {
     expect(screen.getByText("AI suggests: Pause subscription")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByText("Coffee Beans")).toBeInTheDocument());
     expect(screen.getByText("recharge")).toBeInTheDocument();
-    expect(screen.getByText(/Next charge:/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Next charge:/).length).toBeGreaterThan(0);
   });
 
   it("runs the two-step confirm and sends the operation with an idempotency key", async () => {
@@ -158,5 +167,65 @@ describe("SubscriptionApprovalPanel", () => {
     await userEvent.click(screen.getByText("Confirm"));
     await waitFor(() => expect(screen.getByText(/already cancelled/)).toBeInTheDocument());
     expect(screen.queryByText("Pause subscription applied.")).not.toBeInTheDocument();
+  });
+
+  it("shows current vs proposed for a cancellation", async () => {
+    const action: SuggestedAction = { ...PAUSE_ACTION, subscription_operation: "cancel" };
+    render(
+      <SubscriptionApprovalPanel connection={conn} ticketId="t1" action={action} onApproved={vi.fn()} />,
+    );
+    const box = await screen.findByTestId("proposed-change");
+    expect(box).toHaveTextContent("Current vs proposed");
+    expect(box).toHaveTextContent("ACTIVE");
+    expect(box).toHaveTextContent("cancelled (permanent)");
+    expect(box).toHaveTextContent("2026-11-01");
+    expect(box).toHaveTextContent("none");
+  });
+
+  it("shows the skipped order moving one cycle later", async () => {
+    const action: SuggestedAction = { ...PAUSE_ACTION, subscription_operation: "skip" };
+    render(
+      <SubscriptionApprovalPanel connection={conn} ticketId="t1" action={action} onApproved={vi.fn()} />,
+    );
+    const box = await screen.findByTestId("proposed-change");
+    expect(box).toHaveTextContent("Next scheduled order");
+    expect(box).toHaveTextContent("2026-11-01");
+    expect(box).toHaveTextContent("2026-12-01");
+  });
+
+  it("shows current vs proposed frequency and follows edits", async () => {
+    render(
+      <SubscriptionApprovalPanel connection={conn} ticketId="t1" action={FREQ_ACTION} onApproved={vi.fn()} />,
+    );
+    const box = await screen.findByTestId("proposed-change");
+    expect(box).toHaveTextContent("every 1 month");
+    expect(box).toHaveTextContent("every 2 week");
+
+    const countInput = screen.getByDisplayValue("2");
+    await userEvent.clear(countInput);
+    await userEvent.type(countInput, "5");
+    expect(box).toHaveTextContent("every 5 week");
+  });
+
+  it("shows current vs proposed shipping address", async () => {
+    const action: SuggestedAction = {
+      ...PAUSE_ACTION,
+      subscription_operation: "update_address",
+      address: {
+        address1: "99 New Ave",
+        city: "Shelbyville",
+        state: "IL",
+        zip: "62565",
+        country: "US",
+        name: "Jane Doe",
+      },
+    };
+    render(
+      <SubscriptionApprovalPanel connection={conn} ticketId="t1" action={action} onApproved={vi.fn()} />,
+    );
+    const box = await screen.findByTestId("proposed-change");
+    expect(box).toHaveTextContent("Ship to:");
+    expect(box).toHaveTextContent("1 Old St, Apt 2 · Springfield IL 62701 · US");
+    expect(box).toHaveTextContent("99 New Ave · Shelbyville IL 62565 · US");
   });
 });

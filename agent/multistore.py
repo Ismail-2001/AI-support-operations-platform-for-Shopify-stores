@@ -68,6 +68,36 @@ def get_store_id() -> str | None:
     return current_store_id.get()
 
 
+# Integration settings that live per store in credentials_json (alongside
+# shopify_access_token). Secrets here NEVER fall back to process env when a
+# store context is active - one client's ShipEngine/Recharge/Skio account must
+# not leak into another tenant's requests.
+INTEGRATION_CREDENTIAL_KEYS = (
+    "shipengine_api_key",
+    "recharge_api_token",
+    "skio_api_token",
+    "subscription_provider",
+    "return_address",
+    "return_window_days",
+)
+
+
+def integration_overrides() -> dict | None:
+    """Integration settings for the active store.
+
+    Returns None outside a store-scoped request ("use process env defaults")
+    and a dict (possibly empty) inside one ("store-scoped - env secrets do NOT
+    apply"). Read synchronously from the record cache warmed by
+    ensure_store_ready, which the middleware always runs before setting the
+    ContextVar."""
+    store_id = current_store_id.get()
+    if not store_id:
+        return None
+    rec = _store_records.get(store_id)
+    creds = (rec or {}).get("credentials") or {}
+    return {k: creds[k] for k in INTEGRATION_CREDENTIAL_KEYS if k in creds}
+
+
 def store_db_path(store_id: str) -> str:
     """Per-store data file, sibling of the primary DB."""
     base = Path(settings.DB_PATH)
@@ -110,14 +140,26 @@ def _row_to_dict(row: aiosqlite.Row) -> dict:
 
 def public_store(rec: dict) -> dict:
     """Registry record with credentials redacted for API responses."""
-    return {
+    creds = rec["credentials"]
+    out = {
         "id": rec["id"],
         "name": rec["name"],
         "shop_domain": rec["shop_domain"],
-        "has_shopify_token": bool(rec["credentials"].get("shopify_access_token")),
+        "has_shopify_token": bool(creds.get("shopify_access_token")),
         "created_at": rec["created_at"],
         "updated_at": rec["updated_at"],
     }
+    # Integration config: booleans for secrets, plain values for non-secrets.
+    out["has_shipengine_token"] = bool(creds.get("shipengine_api_key"))
+    out["has_recharge_token"] = bool(creds.get("recharge_api_token"))
+    out["has_skio_token"] = bool(creds.get("skio_api_token"))
+    if "subscription_provider" in creds:
+        out["subscription_provider"] = creds.get("subscription_provider")
+    if "return_window_days" in creds:
+        out["return_window_days"] = creds.get("return_window_days")
+    if "return_address" in creds:
+        out["return_address"] = creds.get("return_address")
+    return out
 
 
 async def list_stores() -> list[dict]:

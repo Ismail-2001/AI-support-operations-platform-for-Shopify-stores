@@ -72,6 +72,21 @@ export interface ReturnEligibility {
   };
 }
 
+export interface ReturnRate {
+  rate_id: string;
+  carrier: string;
+  service: string;
+  amount: number;
+  currency: string;
+}
+
+export interface ReturnRates {
+  ticket_id: string;
+  order_id: string | null;
+  rates: ReturnRate[];
+  cheapest_rate_id: string | null;
+}
+
 export interface ReturnLabelResult {
   label_id?: string | null;
   label_url?: string | null;

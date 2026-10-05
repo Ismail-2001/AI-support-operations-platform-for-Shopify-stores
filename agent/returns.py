@@ -22,6 +22,18 @@ def _parse_created_at(value: str | None) -> datetime | None:
         return None
 
 
+def current_return_window_days() -> int | None:
+    """Per-store RETURN_WINDOW_DAYS override when inside a store-scoped request,
+    else None (which makes evaluate_return_eligibility use the process default)."""
+    from agent.multistore import integration_overrides
+
+    raw = (integration_overrides() or {}).get("return_window_days")
+    try:
+        return int(raw) if raw else None
+    except (TypeError, ValueError):
+        return None
+
+
 def evaluate_return_eligibility(
     order: dict[str, Any] | None,
     window_days: int | None = None,

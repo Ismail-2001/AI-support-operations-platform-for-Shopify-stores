@@ -571,3 +571,101 @@ def test_full_refund_without_line_items_still_works(client):
     )
     assert r.status_code == 200
     assert "refund_line_items" not in fake.refund_kwargs
+
+
+def test_refund_key_cannot_be_reused_for_cancel(client):
+    """Idempotency keys are unique across action families: a spent refund key
+    must not be spendable on cancel (or vice versa)."""
+    c, cs_module = client
+    fake = FakeShopifyPartialRefund()
+    cs_module._agent.shopify = fake
+
+    ticket_id = _create_ticket(c)
+    _link_order(ticket_id)
+
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund",
+        headers={**AUTH, "Idempotency-Key": "family-key"},
+        json={"amount": 5.0},
+    )
+    assert r.status_code == 200, r.text
+
+    r2 = c.post(
+        f"/support/tickets/{ticket_id}/actions/cancel",
+        headers={**AUTH, "Idempotency-Key": "family-key"},
+        json={"reason": "customer changed mind"},
+    )
+    assert r2.status_code == 409
+    assert r2.json()["error"] == "IDEMPOTENCY_KEY_CONFLICT"
+    assert r2.json()["details"]["table"] == "refund_audit"
+
+    import asyncio
+
+    import agent.storage as storage_module
+
+    audit = asyncio.run(storage_module.store.get_action_audit("family-key"))
+    assert audit is None  # the rejected cancel wrote nothing
+
+
+def test_refund_amount_must_be_positive(client):
+    c, cs_module = client
+    cs_module._agent.shopify = FakeShopifyPartialRefund()
+    ticket_id = _create_ticket(c)
+    _link_order(ticket_id)
+
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund",
+        headers={**AUTH, "Idempotency-Key": "p-nonpos"},
+        json={"amount": 0},
+    )
+    assert r.status_code == 422
+
+
+def test_refund_shopify_failure_becomes_502_with_failed_audit(client):
+    c, cs_module = client
+
+    class DecliningShopify(FakeShopifyPartialRefund):
+        async def create_refund(self, **kwargs):
+            raise ValueError("gateway declined")
+
+    cs_module._agent.shopify = DecliningShopify()
+    ticket_id = _create_ticket(c)
+    _link_order(ticket_id)
+
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund",
+        headers={**AUTH, "Idempotency-Key": "p-decline"},
+        json={"amount": 5.0},
+    )
+    assert r.status_code == 502
+    assert r.json()["error"] == "REFUND_FAILED"
+
+    import asyncio
+
+    import agent.storage as storage_module
+
+    audit = asyncio.run(storage_module.store.get_refund_audit("p-decline"))
+    assert audit is not None
+    assert audit["status"] == "failed"
+    assert "gateway declined" in audit["error"]
+
+
+def test_edit_address_allowed_while_partially_fulfilled(client):
+    """Partially-shipped orders can still be address-corrected (the unshipped portion
+    ships to the new address) - only fully fulfilled orders are blocked."""
+    c, cs_module = client
+    fake = FakeShopifyAddress()
+    fake.fulfillment_status = "partial"
+    cs_module._agent.shopify = fake
+
+    ticket_id = _create_ticket(c)
+    _link_order(ticket_id)
+
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/edit-address",
+        headers={**AUTH, "Idempotency-Key": "e-partial"},
+        json={"address": VALID_ADDRESS},
+    )
+    assert r.status_code == 200, r.text
+    assert fake.update_calls == 1
+    assert fake.received_address["address1"] == VALID_ADDRESS["address1"]

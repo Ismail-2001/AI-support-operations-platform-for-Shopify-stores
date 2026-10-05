@@ -728,6 +728,27 @@ class TicketStore:
             )
             await db.commit()
 
+    async def find_idempotency_family(self, idempotency_key: str) -> str | None:
+        """Which audit table already holds this Idempotency-Key (None if unused).
+
+        Keys must be unique across action families — reusing a refund key for a
+        cancel (or a return-label key for a subscription) is a client bug we
+        reject with 409 instead of silently executing a different action."""
+        async with aiosqlite.connect(self.db_path) as db:
+            for table in (
+                "refund_audit",
+                "resend_audit",
+                "action_audit",
+                "return_label_audit",
+            ):
+                cursor = await db.execute(
+                    f"SELECT 1 FROM {table} WHERE idempotency_key = ? LIMIT 1",
+                    (idempotency_key,),
+                )
+                if await cursor.fetchone():
+                    return table
+        return None
+
     async def get_return_label_audit(self, idempotency_key: str) -> dict[str, Any] | None:
         """If this idempotency key was already processed, return the stored label result
         instead of buying a second (paid) return label."""
