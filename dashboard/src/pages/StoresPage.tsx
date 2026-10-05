@@ -2,12 +2,66 @@ import { useCallback, useEffect, useState } from "react";
 import { Plus, Store, Trash2 } from "lucide-react";
 import { api } from "../lib/api";
 import type { Connection } from "../lib/api";
-import type { StoreRecord } from "../lib/types";
+import type {
+  StoreIntegrations,
+  StoreRecord,
+  StoreSummary,
+  StoreSyncState,
+} from "../lib/types";
 import { useToast } from "../components/Toast";
 
 const input =
   "w-full rounded-lg border border-line dark:border-line-dark bg-bg dark:bg-bg-dark px-2.5 py-2 text-sm text-ink-900 dark:text-ink-dark-900 placeholder:text-ink-400 dark:placeholder:text-ink-dark-400 outline-none focus:border-teal focus:ring-2 focus:ring-teal/20";
 const label = "block text-[11px] font-medium text-ink-600 dark:text-ink-dark-600 mb-1";
+
+const PILL =
+  "text-[10px] px-1.5 py-0.5 rounded-full bg-teal/15 text-teal capitalize";
+
+/** Pills for the connected integrations of one store (Shopify has its own column). */
+function integrationPills(integrations?: StoreIntegrations) {
+  if (!integrations) return null;
+  const connected = (
+    Object.entries(integrations) as [keyof StoreIntegrations, boolean][]
+  )
+    .filter(([key, on]) => key !== "shopify" && on)
+    .map(([key]) => key);
+  if (connected.length === 0) {
+    return <span className="text-ink-400 dark:text-ink-dark-400">-</span>;
+  }
+  return connected.map((key) => (
+    <span key={key} className={PILL}>
+      {key}
+    </span>
+  ));
+}
+
+/** Sync health for one store: spinning while active, red on error, last-run date otherwise. */
+function syncBadge(sync?: StoreSyncState) {
+  if (!sync) return null;
+  if (sync.status === "running" || sync.status === "scheduled") {
+    return <span className={`${PILL} bg-gold text-white normal-case`}>syncing</span>;
+  }
+  if (sync.status === "error") {
+    return (
+      <span
+        className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400"
+        title={sync.error ?? "Sync failed"}
+      >
+        sync error
+      </span>
+    );
+  }
+  if (sync.last_sync_at) {
+    return (
+      <span className="text-[10px] text-ink-400 dark:text-ink-dark-400">
+        synced {new Date(sync.last_sync_at).toLocaleDateString()}
+      </span>
+    );
+  }
+  return (
+    <span className="text-[10px] text-ink-400 dark:text-ink-dark-400">not synced</span>
+  );
+}
 
 export function StoresPage({
   connection,
@@ -21,6 +75,7 @@ export function StoresPage({
   onStoresChanged?: () => void;
 }) {
   const [stores, setStores] = useState<StoreRecord[]>([]);
+  const [summary, setSummary] = useState<StoreSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [name, setName] = useState("");
@@ -31,9 +86,15 @@ export function StoresPage({
   const { toast } = useToast();
 
   const reload = useCallback(() => {
-    return api
+    const loadList = api
       .listStores(connection)
-      .then((r) => setStores(r.stores))
+      .then((r) => setStores(r.stores));
+    // Fleet health is enhancement: if the summary fails, the store list still works.
+    const loadSummary = api
+      .getStoreSummary(connection)
+      .then(setSummary)
+      .catch(() => setSummary(null));
+    return Promise.all([loadList, loadSummary])
       .catch(() => setError("Could not load stores."))
       .finally(() => setLoading(false));
   }, [connection]);
@@ -142,6 +203,31 @@ export function StoresPage({
         </button>
       </form>
 
+      {summary && stores.length > 0 && (
+        <div
+          className="flex flex-wrap gap-2 text-xs"
+          data-testid="fleet-summary"
+        >
+          <span className="rounded-lg border border-line dark:border-line-dark bg-surface dark:bg-surface-dark px-3 py-1.5 text-ink-900 dark:text-ink-dark-900 font-medium">
+            {summary.counts.total} {summary.counts.total === 1 ? "store" : "stores"}
+          </span>
+          <span className="rounded-lg border border-line dark:border-line-dark bg-surface dark:bg-surface-dark px-3 py-1.5 text-ink-600 dark:text-ink-dark-600">
+            Shopify {summary.counts.shopify}/{summary.counts.total}
+          </span>
+          <span className="rounded-lg border border-line dark:border-line-dark bg-surface dark:bg-surface-dark px-3 py-1.5 text-ink-600 dark:text-ink-dark-600">
+            Gorgias {summary.counts.gorgias}/{summary.counts.total}
+          </span>
+          <span className="rounded-lg border border-line dark:border-line-dark bg-surface dark:bg-surface-dark px-3 py-1.5 text-ink-600 dark:text-ink-dark-600">
+            Subscriptions {summary.counts.subscriptions}/{summary.counts.total}
+          </span>
+          {summary.sync_running > 0 && (
+            <span className="rounded-lg border border-gold/40 bg-gold/10 px-3 py-1.5 text-gold-700 dark:text-gold font-medium">
+              {summary.sync_running} syncing
+            </span>
+          )}
+        </div>
+      )}
+
       <div className="rounded-xl2 border border-line dark:border-line-dark bg-surface dark:bg-surface-dark overflow-hidden">
         {loading ? (
           <div className="p-6 text-sm text-ink-600 dark:text-ink-dark-600">Loading stores...</div>
@@ -156,6 +242,7 @@ export function StoresPage({
                 <th className="px-4 py-3">Store</th>
                 <th className="px-4 py-3">Shop</th>
                 <th className="px-4 py-3">Shopify token</th>
+                <th className="px-4 py-3">Integrations</th>
                 <th className="px-4 py-3">Added</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
@@ -163,6 +250,7 @@ export function StoresPage({
             <tbody>
               {stores.map((s) => {
                 const active = selectedStore === s.id;
+                const entry = summary?.stores.find((x) => x.id === s.id);
                 return (
                   <tr key={s.id} className="border-b border-line dark:border-line-dark last:border-0">
                     <td className="px-4 py-3 font-medium text-ink-900 dark:text-ink-dark-900">
@@ -182,6 +270,12 @@ export function StoresPage({
                       >
                         {s.has_shopify_token ? "stored" : "none"}
                       </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {integrationPills(entry?.integrations)}
+                        {syncBadge(entry?.sync)}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-ink-600 dark:text-ink-dark-600">
                       {new Date(s.created_at).toLocaleDateString()}

@@ -360,4 +360,47 @@ export interface StoreRecord {
   has_shopify_token: boolean;
   created_at: string;
   updated_at: string;
+  // Integration presence flags (redacted — secrets are never echoed by the API).
+  has_shipengine_token?: boolean;
+  has_recharge_token?: boolean;
+  has_skio_token?: boolean;
+  has_gorgias_token?: boolean;
+  gorgias_domain?: string;
+  subscription_provider?: string | null;
+}
+
+export interface StoreIntegrations {
+  shopify: boolean;
+  gorgias: boolean;
+  shipengine: boolean;
+  recharge: boolean;
+  skio: boolean;
+}
+
+export interface StoreSyncState {
+  status: string; // idle | scheduled | running | error | ...
+  last_sync_at: string | null;
+  products_seen: number;
+  error: string | null;
+}
+
+export interface StoreSummaryEntry {
+  id: string;
+  name: string;
+  shop_domain: string | null;
+  integrations: StoreIntegrations;
+  subscription_provider: string | null;
+  sync: StoreSyncState;
+}
+
+export interface StoreSummary {
+  counts: {
+    total: number;
+    shopify: number;
+    gorgias: number;
+    shipengine: number;
+    subscriptions: number;
+  };
+  sync_running: number;
+  stores: StoreSummaryEntry[];
 }

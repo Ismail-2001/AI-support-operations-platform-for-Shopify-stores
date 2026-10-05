@@ -3,8 +3,8 @@ import type {
   LiveStockVariant, NormalizedSubscription, QualityStats, ReturnEligibility, ReturnLabelResult,
   ReturnRates,
   RoiAssumptions, RoiReport, SetupShopifyResult, SetupStatus,
-  SetupTestResult, StoreRecord, SupportAnalytics, ThresholdSetting, TicketMessage, TicketOrder,
-  TicketSubscriptions, TicketWithSuggestion, TraceEntry, WidgetConfig, WidgetSettings,
+  SetupTestResult, StoreRecord, StoreSummary, SupportAnalytics, ThresholdSetting, TicketMessage,
+  TicketOrder, TicketSubscriptions, TicketWithSuggestion, TraceEntry, WidgetConfig, WidgetSettings,
 } from "./types";
 
 export class ApiError extends Error {
@@ -284,6 +284,9 @@ export const api = {
     }),
 
   listStores: (conn: Connection) => request<{ stores: StoreRecord[] }>(conn, "/support/stores"),
+
+  getStoreSummary: (conn: Connection) =>
+    request<StoreSummary>(conn, "/support/stores/summary"),
 
   createStore: (
     conn: Connection,

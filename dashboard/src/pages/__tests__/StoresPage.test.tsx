@@ -9,12 +9,19 @@ import type { StoreRecord } from "../../lib/types";
 vi.mock("../../lib/api", () => ({
   api: {
     listStores: vi.fn(),
+    getStoreSummary: vi.fn(),
     createStore: vi.fn(),
     deleteStore: vi.fn(),
   },
 }));
 
 const conn = { baseUrl: "http://localhost:8001", apiKey: "test-key" };
+
+const emptySummary = {
+  counts: { total: 0, shopify: 0, gorgias: 0, shipengine: 0, subscriptions: 0 },
+  sync_running: 0,
+  stores: [],
+};
 
 function makeStore(overrides: Partial<StoreRecord> = {}): StoreRecord {
   return {
@@ -50,6 +57,7 @@ const mocked = vi.mocked(api);
 beforeEach(() => {
   vi.clearAllMocks();
   mocked.listStores.mockResolvedValue({ stores: [] });
+  mocked.getStoreSummary.mockResolvedValue(emptySummary);
 });
 
 describe("StoresPage", () => {
@@ -126,5 +134,98 @@ describe("StoresPage", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Use store" }));
     expect(onActivateStore).toHaveBeenCalledWith("store-1");
+  });
+
+  it("shows fleet health chips from the summary", async () => {
+    mocked.listStores.mockResolvedValue({
+      stores: [makeStore(), makeStore({ id: "store-2", name: "Beta" })],
+    });
+    mocked.getStoreSummary.mockResolvedValue({
+      counts: { total: 2, shopify: 1, gorgias: 1, shipengine: 0, subscriptions: 0 },
+      sync_running: 1,
+      stores: [],
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("2 stores")).toBeInTheDocument());
+    expect(screen.getByText("Shopify 1/2")).toBeInTheDocument();
+    expect(screen.getByText("Gorgias 1/2")).toBeInTheDocument();
+    expect(screen.getByText("Subscriptions 0/2")).toBeInTheDocument();
+    expect(screen.getByText("1 syncing")).toBeInTheDocument();
+  });
+
+  it("renders integration pills and sync state per store", async () => {
+    mocked.listStores.mockResolvedValue({ stores: [makeStore()] });
+    mocked.getStoreSummary.mockResolvedValue({
+      counts: { total: 1, shopify: 1, gorgias: 1, shipengine: 0, subscriptions: 1 },
+      sync_running: 1,
+      stores: [
+        {
+          id: "store-1",
+          name: "Acme",
+          shop_domain: "acme.myshopify.com",
+          integrations: {
+            shopify: true,
+            gorgias: true,
+            shipengine: false,
+            recharge: true,
+            skio: false,
+          },
+          subscription_provider: "recharge",
+          sync: {
+            status: "running",
+            last_sync_at: null,
+            products_seen: 12,
+            error: null,
+          },
+        },
+      ],
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("gorgias")).toBeInTheDocument());
+    expect(screen.getByText("recharge")).toBeInTheDocument();
+    expect(screen.getByText("syncing")).toBeInTheDocument();
+    // Shopify is shown in its own column, not duplicated as a pill.
+    expect(screen.queryByText("shopify")).not.toBeInTheDocument();
+  });
+
+  it("shows sync error state with the failure message", async () => {
+    mocked.listStores.mockResolvedValue({ stores: [makeStore()] });
+    mocked.getStoreSummary.mockResolvedValue({
+      counts: { total: 1, shopify: 1, gorgias: 0, shipengine: 0, subscriptions: 0 },
+      sync_running: 0,
+      stores: [
+        {
+          id: "store-1",
+          name: "Acme",
+          shop_domain: "acme.myshopify.com",
+          integrations: {
+            shopify: true,
+            gorgias: false,
+            shipengine: false,
+            recharge: false,
+            skio: false,
+          },
+          subscription_provider: null,
+          sync: {
+            status: "error",
+            last_sync_at: null,
+            products_seen: 0,
+            error: "429 rate limited",
+          },
+        },
+      ],
+    });
+    renderPage();
+    await waitFor(() => expect(screen.getByText("sync error")).toBeInTheDocument());
+    expect(screen.getByTitle("429 rate limited")).toBeInTheDocument();
+  });
+
+  it("keeps the store list working when the summary request fails", async () => {
+    mocked.listStores.mockResolvedValue({ stores: [makeStore()] });
+    mocked.getStoreSummary.mockRejectedValue(new Error("boom"));
+    renderPage();
+    await waitFor(() => expect(screen.getByText("Acme")).toBeInTheDocument());
+    expect(screen.queryByTestId("fleet-summary")).not.toBeInTheDocument();
+    expect(screen.getByText(/not connected|acme\.myshopify\.com/)).toBeInTheDocument();
   });
 });
