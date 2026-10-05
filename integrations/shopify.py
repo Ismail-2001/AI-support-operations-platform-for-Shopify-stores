@@ -9,8 +9,11 @@ import structlog
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from agent.config import settings
+from agent.resilience import CircuitBreaker, guarded, register_breaker
 
 logger = structlog.get_logger(__name__)
+
+SHOPIFY_BREAKER = register_breaker(CircuitBreaker("shopify"))
 
 
 class ShopifyNotConfigured(Exception):
@@ -20,6 +23,9 @@ class ShopifyNotConfigured(Exception):
 _EXP_BACKOFF = {
     "stop": stop_after_attempt(3),
     "wait": wait_exponential(multiplier=1, min=1, max=8),
+    # Raise the ORIGINAL exception after exhaustion (not tenacity's RetryError)
+    # so callers see httpx.HTTPStatusError / timeouts as they always did.
+    "reraise": True,
 }
 
 _PAGE_INFO_RE = re.compile(r"page_info=([^&>]+)")
@@ -44,7 +50,8 @@ def _is_transient_shopify_error(exc: BaseException) -> bool:
     """Transient = 5xx server error, timeout, or connection error.
     4xx client errors are never retried — they mean the request itself is wrong."""
     return isinstance(exc, httpx.TimeoutException | httpx.TransportError) or (
-        isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600
+        isinstance(exc, httpx.HTTPStatusError)
+        and (exc.response.status_code == 429 or 500 <= exc.response.status_code < 600)
     )
 
 
@@ -66,11 +73,24 @@ def _log_retry_attempt(retry_state) -> None:
 
 
 class ShopifyClient:
-    def __init__(self, shop_domain: str | None = None, access_token: str | None = None):
-        # Overrides let a per-store agent instance target a different shop while
-        # the process default keeps coming from settings (see agent/storage.py stores).
-        domain = shop_domain or settings.SHOPIFY_SHOP_DOMAIN
-        token = access_token or settings.SHOPIFY_ACCESS_TOKEN
+    def __init__(
+        self,
+        shop_domain: str | None = None,
+        access_token: str | None = None,
+        *,
+        strict: bool = False,
+    ):
+        # `strict=True` means "this instance belongs to a registered store" -
+        # credentials come ONLY from the registry record, never from process env.
+        # Without it, an empty token would silently fall through to the
+        # deployment tenant's SHOPIFY_ACCESS_TOKEN and ship that token to
+        # another shop (see agent/multistore.py INTEGRATION_CREDENTIAL_KEYS).
+        if strict:
+            domain = shop_domain or ""
+            token = access_token
+        else:
+            domain = shop_domain or settings.SHOPIFY_SHOP_DOMAIN
+            token = access_token or settings.SHOPIFY_ACCESS_TOKEN
         self.shop_domain = domain
         self.enabled = bool(domain and token)
         if self.enabled:
@@ -81,6 +101,7 @@ class ShopifyClient:
                 "Content-Type": "application/json",
             }
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -105,6 +126,7 @@ class ShopifyClient:
             orders = resp.json().get("orders", [])
             return orders[0] if orders else None
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -128,6 +150,7 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json().get("orders", [])
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -143,6 +166,7 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json().get("order")
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -158,6 +182,7 @@ class ShopifyClient:
             policies = resp.json().get("policies", [])
             return {p["title"]: p.get("body", "") for p in policies if p.get("body")}
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -190,6 +215,7 @@ class ShopifyClient:
                     break
         return products[:limit]
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -215,6 +241,7 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json().get("metafields", [])
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -235,6 +262,7 @@ class ShopifyClient:
             products = resp.json().get("products", [])
             return products[0] if products else None
 
+    @guarded(SHOPIFY_BREAKER, _is_timeout_or_connection_error)
     @retry(
         retry=retry_if_exception(_is_timeout_or_connection_error),
         before_sleep=_log_retry_attempt,
@@ -296,6 +324,7 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json()
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_timeout_or_connection_error),
         before_sleep=_log_retry_attempt,
@@ -337,6 +366,7 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json()
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_timeout_or_connection_error),
         before_sleep=_log_retry_attempt,
@@ -381,6 +411,7 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json()
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_transient_shopify_error),
         before_sleep=_log_retry_attempt,
@@ -413,6 +444,7 @@ class ShopifyClient:
             resp.raise_for_status()
             return resp.json().get("order", {})
 
+    @guarded(SHOPIFY_BREAKER, _is_transient_shopify_error)
     @retry(
         retry=retry_if_exception(_is_timeout_or_connection_error),
         before_sleep=_log_retry_attempt,

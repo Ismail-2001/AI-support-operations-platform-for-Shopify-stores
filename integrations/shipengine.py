@@ -25,19 +25,24 @@ import structlog
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from agent.config import settings
+from agent.resilience import CircuitBreaker, guarded, register_breaker
 from api.errors import APIError, raise_not_configured
 
 logger = structlog.get_logger(__name__)
 
+SHIPENGINE_BREAKER = register_breaker(CircuitBreaker("shipengine"))
+
 _EXP_BACKOFF = {
     "stop": stop_after_attempt(3),
     "wait": wait_exponential(multiplier=1, min=1, max=8),
+    "reraise": True,
 }
 
 
 def _is_transient(exc: BaseException) -> bool:
     return isinstance(exc, httpx.TimeoutException | httpx.TransportError) or (
-        isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600
+        isinstance(exc, httpx.HTTPStatusError)
+        and (exc.response.status_code == 429 or 500 <= exc.response.status_code < 600)
     )
 
 
@@ -131,29 +136,46 @@ class ShipEngineClient:
             raise_not_configured("ShipEngine")
         return {"API-Key": self._api_key()}
 
+    async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Public entry: HTTP failures surface as APIError(SHIPENGINE_ERROR)
+        exactly as before; retries + breaker run on the raw worker below."""
+        try:
+            return await self._post_http(path, body)
+        except httpx.HTTPStatusError as exc:
+            raise self._error(path, exc.response) from exc
+
+    @guarded(SHIPENGINE_BREAKER, _is_transient)
     @retry(
         retry=retry_if_exception(_is_transient),
         before_sleep=_log_retry,
         **_EXP_BACKOFF,
     )
-    async def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
+    async def _post_http(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(f"{self.BASE_URL}{path}", headers=self._headers(), json=body)
         if resp.status_code >= 400:
-            # ShipEngine error bodies carry a `message` (and often a details array).
-            try:
-                payload = resp.json()
-                message = payload.get("message") or payload.get("errors")
-                if isinstance(message, list):
-                    message = "; ".join(str(m) for m in message)
-            except Exception:
-                message = resp.text[:300]
-            raise APIError(
-                code="SHIPENGINE_ERROR",
-                message=f"ShipEngine {path} failed ({resp.status_code}): {message}",
-                status=502,
-            )
+            if resp.status_code == 429 or resp.status_code >= 500:
+                # Transient: let tenacity retry on the raw httpx error, then
+                # re-raise it (reraise=True) for the guarded layer to count.
+                resp.raise_for_status()
+            raise self._error(path, resp)
         return resp.json()
+
+    @staticmethod
+    def _error(path: str, resp: httpx.Response) -> APIError:
+        # ShipEngine error bodies carry a `message` (and often a details array).
+        try:
+            payload = resp.json()
+            message = payload.get("message") or payload.get("errors")
+            if isinstance(message, list):
+                message = "; ".join(str(m) for m in message)
+        except Exception:
+            message = resp.text[:300]
+        return APIError(
+            code="SHIPENGINE_ERROR",
+            message=f"ShipEngine {path} failed ({resp.status_code}): {message}",
+            status=502,
+        )
 
     def _package(self) -> dict[str, Any]:
         return {

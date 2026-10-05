@@ -25,6 +25,7 @@ import structlog
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from agent.config import settings
+from agent.resilience import CircuitBreaker, guarded, register_breaker
 from integrations.subscriptions import (
     NormalizedSubscription,
     SubscriptionAPIError,
@@ -34,16 +35,20 @@ from integrations.subscriptions import (
 
 logger = structlog.get_logger(__name__)
 
+RECHARGE_BREAKER = register_breaker(CircuitBreaker("recharge"))
+
 _EXP_BACKOFF = {
     "stop": stop_after_attempt(3),
     "wait": wait_exponential(multiplier=1, min=1, max=8),
+    "reraise": True,
 }
 
 
 def _is_transient(exc: BaseException) -> bool:
-    """Retry 5xx/timeouts/connection errors only — 4xx means the request itself is wrong."""
+    """Retry 5xx/429/timeouts/connection errors only — 4xx means the request itself is wrong."""
     return isinstance(exc, httpx.TimeoutException | httpx.TransportError) or (
-        isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600
+        isinstance(exc, httpx.HTTPStatusError)
+        and (exc.response.status_code == 429 or 500 <= exc.response.status_code < 600)
     )
 
 
@@ -80,12 +85,32 @@ class RechargeClient:
                 "Content-Type": "application/json",
             }
 
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
+        """Public entry: callers see domain errors (SubscriptionAPIError) as
+        always; retries + breaker happen on the raw HTTP worker below, which
+        raises httpx.HTTPStatusError so the transient predicate can see status."""
+        try:
+            return await self._request_http(method, path, json_body=json_body, params=params)
+        except httpx.HTTPStatusError as exc:
+            raise SubscriptionAPIError(
+                f"Recharge {method} {path} failed ({exc.response.status_code}): "
+                f"{exc.response.text[:300]}"
+            ) from exc
+
+    @guarded(RECHARGE_BREAKER, _is_transient)
     @retry(
         retry=retry_if_exception(_is_transient),
         before_sleep=_log_retry,
         **_EXP_BACKOFF,
     )
-    async def _request(
+    async def _request_http(
         self,
         method: str,
         path: str,
@@ -104,6 +129,8 @@ class RechargeClient:
         if resp.status_code == 404:
             return None
         if resp.status_code >= 400:
+            if resp.status_code == 429 or resp.status_code >= 500:
+                resp.raise_for_status()  # transient: tenacity retries, then re-raises
             raise SubscriptionAPIError(
                 f"Recharge {method} {path} failed ({resp.status_code}): {resp.text[:300]}"
             )

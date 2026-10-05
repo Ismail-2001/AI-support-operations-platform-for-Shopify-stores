@@ -22,6 +22,7 @@ import structlog
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from agent.config import settings
+from agent.resilience import CircuitBreaker, guarded, register_breaker
 from integrations.subscriptions import (
     NormalizedSubscription,
     SubscriptionAPIError,
@@ -30,9 +31,12 @@ from integrations.subscriptions import (
 
 logger = structlog.get_logger(__name__)
 
+SKIO_BREAKER = register_breaker(CircuitBreaker("skio"))
+
 _EXP_BACKOFF = {
     "stop": stop_after_attempt(3),
     "wait": wait_exponential(multiplier=1, min=1, max=8),
+    "reraise": True,
 }
 
 _SUB_FIELDS = """
@@ -56,7 +60,8 @@ _SUB_FIELDS = """
 
 def _is_transient(exc: BaseException) -> bool:
     return isinstance(exc, httpx.TimeoutException | httpx.TransportError) or (
-        isinstance(exc, httpx.HTTPStatusError) and 500 <= exc.response.status_code < 600
+        isinstance(exc, httpx.HTTPStatusError)
+        and (exc.response.status_code == 429 or 500 <= exc.response.status_code < 600)
     )
 
 
@@ -88,17 +93,30 @@ class SkioClient:
                 "Content-Type": "application/graphql",
             }
 
+    async def _gql(self, document: str) -> dict[str, Any]:
+        """Public entry: HTTP failures surface as SubscriptionAPIError (as
+        before); the retrying/breaker-guarded worker below speaks raw httpx."""
+        try:
+            return await self._gql_http(document)
+        except httpx.HTTPStatusError as exc:
+            raise SubscriptionAPIError(
+                f"Skio request failed ({exc.response.status_code}): {exc.response.text[:300]}"
+            ) from exc
+
+    @guarded(SKIO_BREAKER, _is_transient)
     @retry(
         retry=retry_if_exception(_is_transient),
         before_sleep=_log_retry,
         **_EXP_BACKOFF,
     )
-    async def _gql(self, document: str) -> dict[str, Any]:
+    async def _gql_http(self, document: str) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=15) as client:
             resp = await client.post(
                 self.BASE_URL, headers=self.headers, content=document.encode("utf-8")
             )
         if resp.status_code >= 400:
+            if resp.status_code == 429 or resp.status_code >= 500:
+                resp.raise_for_status()  # transient: retried, then re-raised
             raise SubscriptionAPIError(
                 f"Skio request failed ({resp.status_code}): {resp.text[:300]}"
             )

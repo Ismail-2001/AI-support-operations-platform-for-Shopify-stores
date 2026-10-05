@@ -69,6 +69,8 @@ def reset_settings():
     settings.RESEND_RATE_LIMIT_PER_MINUTE = 10
     settings.ACTION_RATE_LIMIT_PER_MINUTE = 10
     settings.DAILY_COST_CAP_USD = 5.0
+    settings.ALERT_WEBHOOK_URL = None
+    settings.MAX_HISTORY_MESSAGES = 40
     settings.ENV = "development"
     yield
 

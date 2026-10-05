@@ -19,6 +19,7 @@ from fastapi.responses import JSONResponse
 
 from agent.config import settings
 from agent.knowledge_base import knowledge_base
+from agent.resilience import CircuitOpenError
 from agent.storage import storage_is_ephemeral, store
 from api.chat import chat_router
 from api.customer_support import public_router, webhook_router
@@ -76,6 +77,28 @@ async def lifespan(app: FastAPI):
     await store.init()
     await knowledge_base.init()
     logger.info("cs_agent_started", tenant_name=settings.TENANT_NAME)
+
+    # Surface leftover dead letters from a previous run — silent data loss would
+    # otherwise hide behind a green /health.
+    try:
+        pending_dl = await store.count_pending_dead_letters()
+    except Exception as dl_exc:
+        logger.warning("dead_letter_startup_check_failed", error=str(dl_exc))
+        pending_dl = 0
+    if pending_dl:
+        logger.error("dead_letters_pending", pending=pending_dl)
+        from agent.alerting import send_alert
+
+        await send_alert(
+            title="Unprocessed webhooks on startup",
+            message=(
+                f"{pending_dl} dead-lettered webhook payload(s) are waiting. "
+                "Review GET /support/dead-letters and redrive with "
+                "POST /support/dead-letters/{id}/retry."
+            ),
+            severity="error",
+            dedupe_key="dlq_pending",
+        )
 
     # Signal handlers only work on Unix; on Windows, SIGTERM is not supported
     # by add_signal_handler. Uvicorn handles SIGINT natively anyway.
@@ -159,6 +182,21 @@ async def api_error_handler(request: Request, exc: APIError):
     return JSONResponse(status_code=exc.status_code, content=body)
 
 
+@app.exception_handler(CircuitOpenError)
+async def circuit_open_handler(request: Request, exc: CircuitOpenError):
+    """An integration's circuit is open (upstream failing) - fail fast with a
+    retryable 503 instead of hanging on retries against a dead service."""
+    logger.warning("circuit_open_request_rejected", path=request.url.path, circuit=exc.name)
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": "CIRCUIT_OPEN",
+            "message": f"Upstream integration {exc.name!r} is temporarily unavailable",
+            "circuit": exc.name,
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     # Never leak stack traces / internal details to the client — log the full thing
@@ -199,6 +237,12 @@ async def health():
     checks["shopify"] = "connected" if shopify.enabled else "not_configured"
     checks["gorgias"] = "connected" if gorgias.enabled else "not_configured"
     checks["auto_send"] = "enabled" if settings.AUTO_SEND_ENABLED else "disabled"
+
+    # Circuit-breaker states per outbound integration - an "open" circuit means
+    # we're failing fast instead of hammering a dead upstream.
+    from agent.resilience import circuit_snapshots
+
+    checks["circuits"] = circuit_snapshots()
 
     # Storage persistence — "ephemeral" means data is wiped on the next
     # deploy/restart (Render without an attached disk). Informational only:

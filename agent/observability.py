@@ -93,6 +93,17 @@ async def check_daily_cost_cap() -> bool:
             cap_usd=settings.DAILY_COST_CAP_USD,
             action="auto_send force-disabled until a human investigates",
         )
+        from agent.alerting import send_alert
+
+        await send_alert(
+            title="Daily cost cap exceeded",
+            message=(
+                f"Today's LLM spend is ${today_cost:.2f} (cap ${settings.DAILY_COST_CAP_USD:.2f}). "
+                "Auto-send is force-disabled until the cap is raised or the day rolls over."
+            ),
+            severity="critical",
+            dedupe_key="daily_cost_cap",
+        )
     return within_budget
 
 
