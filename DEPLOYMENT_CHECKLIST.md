@@ -1,7 +1,7 @@
 # DEPLOYMENT CHECKLIST — cs-agent on Render
 
 ## Prerequisites
-- GitHub account with `AI-support-operations-platform-for-Shopify-stores` repo pushed
+- GitHub account with `Customer-Support-AI-Employee` repo pushed
 - Render account (sign up at https://render.com)
 - Shopify store, Gorgias account, OpenRouter API key ready
 
@@ -12,7 +12,7 @@
 1. Go to https://dashboard.render.com
 2. Click **New +** → **Blueprint**
 3. Connect your GitHub account
-4. Select **Ismail-2001/AI-support-operations-platform-for-Shopify-stores**
+ 4. Select **Ismail-2001/Customer-Support-AI-Employee**
 5. Render auto-detects `render.yaml` → click **Apply**
 
 ---

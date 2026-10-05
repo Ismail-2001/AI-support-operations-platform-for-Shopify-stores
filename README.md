@@ -5,13 +5,14 @@
 ### Deploy an AI agent into your Shopify store in 10 minutes. It answers orders, handles returns, suggests refunds, and escalates — all inside your Gorgias workflow.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Ismail-2001/Customer-Support-AI-Employee/actions/workflows/ci.yml/badge.svg)](https://github.com/Ismail-2001/Customer-Support-AI-Employee/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.12%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.142-009688?logo=fastapi)](https://fastapi.tiangolo.com/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2-1C3C3C?logo=langchain)](https://langchain-ai.github.io/langgraph/)
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-370%20Python%20%7C%20125%20Frontend-brightgreen)](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/actions)
+[![Tests](https://img.shields.io/badge/Tests-418%20Python%20%7C%20129%20Frontend-brightgreen)](https://github.com/Ismail-2001/Customer-Support-AI-Employee/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -325,8 +326,8 @@ sequenceDiagram
 ### 1. Clone & Configure
 
 ```bash
-git clone https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores.git
-cd AI-support-operations-platform-for-Shopify-stores
+git clone https://github.com/Ismail-2001/Customer-Support-AI-Employee.git
+cd Customer-Support-AI-Employee
 cp .env.example .env
 ```
 
@@ -943,7 +944,7 @@ Distributed under the MIT License. See `LICENSE` for more information.
 [![GitHub](https://img.shields.io/badge/GitHub-181717?logo=github&logoColor=white)](https://github.com/Ismail-2001)
 
 For inquiries about deployment, customization, or enterprise licensing:
-- Open a [GitHub Issue](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores/issues)
+- Open a [GitHub Issue](https://github.com/Ismail-2001/Customer-Support-AI-Employee/issues)
 - Connect via [GitHub Profile](https://github.com/Ismail-2001)
 
 ---

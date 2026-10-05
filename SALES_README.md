@@ -112,6 +112,6 @@ This isn't a wrapper around ChatGPT with a Shopify prompt. It's a purpose-built 
 **Ismail Sajid** — Principal AI Engineer
 
 - GitHub: [github.com/Ismail-2001](https://github.com/Ismail-2001)
-- Project repo: [AI-support-operations-platform-for-Shopify-stores](https://github.com/Ismail-2001/AI-support-operations-platform-for-Shopify-stores)
+- Project repo: [Customer-Support-AI-Employee](https://github.com/Ismail-2001/Customer-Support-AI-Employee)
 
 Schedule a 15-minute demo. I'll connect cs-agent to your Shopify store and show you handling real tickets live.
