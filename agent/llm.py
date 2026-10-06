@@ -57,6 +57,11 @@ def get_llm(temperature: float = 0.0) -> BaseChatModel:
             api_key=settings.OPENROUTER_API_KEY.get_secret_value(),
             temperature=temperature,
             timeout=30,
+            # OpenRouter pre-authorizes worst-case output tokens against the wallet
+            # balance (402 when the requested max exceeds remaining credits). The
+            # model default is 16384; classification and support replies never need
+            # more than ~1k, and this doubles as a per-call cost governor.
+            max_tokens=1024,
             base_url="https://openrouter.ai/api/v1",
             default_headers={
                 "HTTP-Referer": "https://github.com/Ismail-2001/customer-support-ai-employee",
