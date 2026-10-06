@@ -114,12 +114,15 @@ class GorgiasClient:
         if not self.enabled:
             raise GorgiasNotConfigured("Gorgias credentials not set in .env")
         async with httpx.AsyncClient(timeout=15, auth=self.auth) as client:
+            # The status query filter is rejected ("Unknown field") on some Gorgias
+            # plans — fetch a wider page and filter locally instead.
             resp = await client.get(
                 f"{self.base_url}/tickets",
-                params={"status": "open", "limit": limit},
+                params={"limit": min(max(limit * 3, 60), 100)},
             )
             resp.raise_for_status()
-            return resp.json().get("data", [])
+            open_tickets = [t for t in resp.json().get("data", []) if t.get("status") == "open"]
+            return open_tickets[:limit]
 
     @guarded(GORGIAS_BREAKER, _is_transient_gorgias_error)
     @retry(
