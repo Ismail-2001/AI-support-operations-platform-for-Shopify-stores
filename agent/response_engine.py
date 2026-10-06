@@ -7,7 +7,6 @@ customer experience, so the model is explicitly told to be skeptical of itself.
 """
 
 import time
-from typing import Any
 
 import structlog
 from pydantic import BaseModel, Field
@@ -111,6 +110,34 @@ Rules:
   OR sentiment is very_negative, OR you set a suggested_action."""
 
 
+class _RawAddress(BaseModel):
+    address1: str | None = None
+    address2: str | None = None
+    city: str | None = None
+    province: str | None = None
+    zip: str | None = None
+    country: str | None = None
+    name: str | None = None
+    company: str | None = None
+    phone: str | None = None
+
+
+class _RawFrequency(BaseModel):
+    unit: str | None = Field(default=None, description='"day", "week", or "month"')
+    count: int | None = None
+
+
+class _RawRefundLineItem(BaseModel):
+    line_item_id: str | int | None = None
+    quantity: int | None = None
+
+
+class _RawReturnLineItem(BaseModel):
+    name: str | None = None
+    quantity: int | None = None
+    line_item_id: str | int | None = None
+
+
 class _RawSuggestedAction(BaseModel):
     type: str = Field(
         default="none",
@@ -122,18 +149,18 @@ class _RawSuggestedAction(BaseModel):
     order_id: str | None = None
     amount: float | None = None
     reason: str | None = None
-    address: dict[str, str] | None = None
-    refund_line_items: list[dict[str, Any]] | None = None
+    address: _RawAddress | None = None
+    refund_line_items: list[_RawRefundLineItem] | None = None
     subscription_id: str | None = None
     subscription_provider: str | None = Field(default=None, description='"recharge" or "skio"')
     subscription_operation: str | None = Field(
         default=None,
         description='"pause", "skip", "cancel", "update_address", or "change_frequency"',
     )
-    frequency: dict[str, Any] | None = Field(
+    frequency: _RawFrequency | None = Field(
         default=None, description='e.g. {"unit": "week", "count": 2} for change_frequency'
     )
-    return_line_items: list[dict[str, Any]] | None = None
+    return_line_items: list[_RawReturnLineItem] | None = None
 
 
 class _RawSuggestion(BaseModel):
@@ -271,20 +298,37 @@ class ResponseGenerationEngine:
                 )
                 action_type = ActionType.NONE
             if action_type != ActionType.NONE:
+                raw_action = parsed.suggested_action
                 suggested_action = SuggestedAction(
                     type=action_type,
-                    order_id=parsed.suggested_action.order_id or ticket.order_id,
-                    amount=parsed.suggested_action.amount,
-                    reason=parsed.suggested_action.reason,
-                    address=parsed.suggested_action.address,
-                    refund_line_items=parsed.suggested_action.refund_line_items,
-                    subscription_id=parsed.suggested_action.subscription_id,
-                    subscription_provider=parsed.suggested_action.subscription_provider,
-                    subscription_operation=_safe_subscription_operation(
-                        ticket.id, parsed.suggested_action.subscription_operation
+                    order_id=raw_action.order_id or ticket.order_id,
+                    amount=raw_action.amount,
+                    reason=raw_action.reason,
+                    address=(
+                        raw_action.address.model_dump(exclude_none=True)
+                        if raw_action.address
+                        else None
                     ),
-                    frequency=parsed.suggested_action.frequency,
-                    return_line_items=parsed.suggested_action.return_line_items,
+                    refund_line_items=(
+                        [i.model_dump(exclude_none=True) for i in raw_action.refund_line_items]
+                        if raw_action.refund_line_items
+                        else None
+                    ),
+                    subscription_id=raw_action.subscription_id,
+                    subscription_provider=raw_action.subscription_provider,
+                    subscription_operation=_safe_subscription_operation(
+                        ticket.id, raw_action.subscription_operation
+                    ),
+                    frequency=(
+                        raw_action.frequency.model_dump(exclude_none=True)
+                        if raw_action.frequency
+                        else None
+                    ),
+                    return_line_items=(
+                        [i.model_dump(exclude_none=True) for i in raw_action.return_line_items]
+                        if raw_action.return_line_items
+                        else None
+                    ),
                 )
                 has_action = True
             else:
