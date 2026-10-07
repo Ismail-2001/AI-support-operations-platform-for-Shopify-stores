@@ -12,7 +12,7 @@
 [![OpenRouter](https://img.shields.io/badge/OpenRouter-gpt--4o--mini-8434DE?logo=openrouter)](https://openrouter.ai/)
 [![React](https://img.shields.io/badge/Dashboard-React-61DAFB?logo=react)](https://react.dev/)
 [![SQLite](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?logo=sqlite)](https://www.sqlite.org/)
-[![Tests](https://img.shields.io/badge/Tests-418%20Python%20%7C%20129%20Frontend-brightgreen)](https://github.com/Ismail-2001/Customer-Support-AI-Employee/actions)
+[![Tests](https://img.shields.io/badge/Tests-445%20Python%20%7C%20142%20Frontend-brightgreen)](https://github.com/Ismail-2001/Customer-Support-AI-Employee/actions)
 [![Render](https://img.shields.io/badge/Deploy-Render-46E3B7?logo=render)](https://render.com/)
 [![License](https://img.shields.io/badge/built%20for-Shopify-7AB55C?logo=shopify)](https://shopify.com/)
 
@@ -306,7 +306,7 @@ sequenceDiagram
 | **Dashboard** | React + TypeScript | Operator UI with dark mode |
 | **Styling** | Tailwind CSS | Utility-first CSS |
 | **Deployment** | Render / Docker | Blueprint deploy + free tier |
-| **Testing** | Pytest + Vitest | 418 Python + 129 frontend tests |
+| **Testing** | Pytest + Vitest | 445 Python + 142 frontend tests |
 | **Linting** | Ruff | Fast Python linter + formatter |
 | **CI/CD** | GitHub Actions | Automated test + lint + deploy pipeline |
 
@@ -656,7 +656,7 @@ npm run test:watch    # Watch mode
 npm run test:coverage # Run with coverage (requires @vitest/coverage-v8)
 ```
 
-129 tests across 15 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar (including the store switcher), ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), the two action-approval panels (cancel, edit address, partial refund with line-item scoping), the subscription approval panel (including current-vs-proposed diffs per operation), the return-label approval panel (live carrier rates with cost shown before approval), the Stores page (list, fleet-health chips, integration pills, sync states, create/delete), and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff).
+142 tests across 17 suites covering Toast, Badges, ConfidenceBar, SearchInput, Skeleton, Sidebar (including the store switcher), ConnectScreen, ThemeProvider, the Setup wizard (including the full finish → "You're ready" flow), the two action-approval panels (cancel, edit address, partial refund with line-item scoping), the subscription approval panel (including current-vs-proposed diffs per operation), the return-label approval panel (live carrier rates with cost shown before approval), the Stores page (list, fleet-health chips, integration pills, sync states, create/delete), and the embeddable chat widget (SSE parser, config gating, session resume, streaming replies, handoff), the connection hook (corrupt-storage recovery, cross-tab sync), and the API client's central 401 unauthorized dispatch.
 
 ### Eval Harness
 
@@ -756,7 +756,7 @@ cs-agent/
 │   ├── scoring.py              # Scoring logic (unit-tested)
 │   └── compare.py              # Diff reports between prompt versions
 │
-├── tests/                      # 370 unit/integration tests
+├── tests/                      # 445 unit/integration tests
 │   ├── conftest.py             # Fixtures: temp DB, FakeClassifier, FakeShopify
 │   ├── test_api_security.py    # Auth, rate limits, idempotency
 │   ├── test_gorgias.py         # Gorgias retry + webhook tests

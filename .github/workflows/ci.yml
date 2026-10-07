@@ -20,10 +20,10 @@ jobs:
     name: Backend (Lint, Format & Tests)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -37,6 +37,9 @@ jobs:
       - name: Run ruff format check
         run: ruff format --check .
 
+      - name: Env var sync check (.env.example vs render.yaml)
+        run: python scripts/check_env_sync.py
+
       - name: Dependency security audit (pip-audit)
         run: pip-audit -r requirements.lock
 
@@ -47,7 +50,7 @@ jobs:
           API_KEY: test-key-for-ci
           REQUIRE_API_KEY: "false"
           GROQ_API_KEY: dummy
-        run: pytest tests/ -v --tb=short -x
+        run: pytest tests/ -v --tb=short -x --cov=agent --cov=api --cov=integrations --cov-report=term --cov-fail-under=80
 
   # ──────────────────────────────────────────────────────────────
   # Dashboard: audit, tsc, vitest, vite build
@@ -60,10 +63,10 @@ jobs:
       run:
         working-directory: dashboard
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
@@ -95,13 +98,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: [backend, test-dashboard]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Build Docker image
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v5
         with:
           context: .
           push: false
@@ -119,7 +122,7 @@ jobs:
     if: github.ref == 'refs/heads/develop' && github.event_name == 'push'
     environment: staging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Deploy to Render (Staging)
         env:
@@ -140,7 +143,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     environment: production
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Deploy to Render (Production)
         env:

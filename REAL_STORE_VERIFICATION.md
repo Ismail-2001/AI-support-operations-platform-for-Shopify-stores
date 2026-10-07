@@ -1,7 +1,7 @@
 # Real-Store Verification Runbook
 
 Manual verification of the money-touching actions against a **real Shopify store**.
-The automated suite (`pytest tests/`, 418 tests) proves the logic with fakes; this
+The automated suite (`pytest tests/`, 445 tests) proves the logic with fakes; this
 runbook proves the *integrations* with production APIs. Run it before trusting the
 agent with a paying client, and after any change to `integrations/` or the action
 endpoints.

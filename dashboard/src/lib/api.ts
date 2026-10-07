@@ -46,6 +46,22 @@ export function setSelectedStore(id: string | null): void {
   }
 }
 
+/**
+ * Fired once per 401 response with the error detail as `detail`. The App
+ * subscribes and shows a single toast — pages otherwise swallow 401s into
+ * generic "Failed to load" messages, leaving operators staring at empty lists
+ * with no hint their API key was rejected.
+ */
+export const UNAUTHORIZED_EVENT = "cs-api-unauthorized";
+
+function notifyUnauthorized(detail: string): void {
+  try {
+    window.dispatchEvent(new CustomEvent(UNAUTHORIZED_EVENT, { detail }));
+  } catch {
+    /* non-browser context (tests without window) */
+  }
+}
+
 async function request<T>(conn: Connection, path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${conn.baseUrl.replace(/\/$/, "")}${path}`, {
     ...init,
@@ -64,6 +80,7 @@ async function request<T>(conn: Connection, path: string, init?: RequestInit): P
     } catch {
       /* ignore */
     }
+    if (res.status === 401) notifyUnauthorized(detail);
     throw new ApiError(res.status, detail);
   }
   return res.json();

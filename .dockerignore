@@ -52,6 +52,13 @@ dashboard/node_modules/
 dashboard/.next/
 dashboard/out/
 dashboard/build/
+dashboard/dist/
+dashboard/coverage/
+dashboard/nm_backup/
+dashboard/*.tsbuildinfo
+
+# Lint caches
+.ruff_cache/
 
 # Logs
 *.log

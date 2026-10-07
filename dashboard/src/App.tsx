@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import { useConnection } from "./lib/useConnection";
 import { ThemeProvider } from "./lib/ThemeProvider";
-import { api, getSelectedStore, setSelectedStore } from "./lib/api";
+import { api, getSelectedStore, setSelectedStore, UNAUTHORIZED_EVENT } from "./lib/api";
 import { ConnectScreen } from "./components/ConnectScreen";
 import { Sidebar, type View } from "./components/Sidebar";
-import { ToastProvider } from "./components/Toast";
+import { ToastProvider, useToast } from "./components/Toast";
 import { CommandPalette } from "./components/CommandPalette";
 import { TicketsPage } from "./pages/TicketsPage";
 import { TicketDetailPage } from "./pages/TicketDetailPage";
@@ -18,6 +18,31 @@ import { StoresPage } from "./pages/StoresPage";
 import type { StoreRecord } from "./lib/types";
 
 type Health = { shopify_connected: boolean; gorgias_connected: boolean; auto_send_enabled: boolean; storage_persistent: boolean } | null;
+
+/**
+ * Surfaces API-key rejections once, centrally. A dead key can fail every
+ * request in a burst (health, stores, page loads), so throttle to one toast
+ * per few seconds instead of flooding. Lives under ToastProvider.
+ */
+function UnauthorizedListener() {
+  const { toast } = useToast();
+  useEffect(() => {
+    let lastShownAt = 0;
+    const handler = (e: Event) => {
+      const now = Date.now();
+      if (now - lastShownAt < 3000) return;
+      lastShownAt = now;
+      const detail = (e as CustomEvent<string>).detail;
+      toast(
+        "error",
+        `API key rejected${detail ? `: ${detail}` : ""} — use Disconnect and reconnect with a valid key.`,
+      );
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, handler);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, handler);
+  }, [toast]);
+  return null;
+}
 
 export default function App() {
   const { connection, setConnection } = useConnection();
@@ -86,6 +111,7 @@ export default function App() {
   return (
     <ThemeProvider>
       <ToastProvider>
+        <UnauthorizedListener />
         <div className="flex bg-bg dark:bg-bg-dark min-h-screen font-sans transition-colors">
           <Sidebar
             view={view}
