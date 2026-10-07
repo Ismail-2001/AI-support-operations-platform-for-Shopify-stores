@@ -15,9 +15,17 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Major upgrades need a deliberate PR (runtime behavior, CVE tradeoffs).
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /dashboard
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    ignore:
+      # Majors break the build toolchain (e.g. typescript 7) — upgrade on purpose.
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
