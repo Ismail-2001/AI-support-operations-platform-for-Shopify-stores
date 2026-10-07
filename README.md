@@ -394,6 +394,13 @@ curl -X POST http://localhost:8001/support/tickets \
   -d '{"customer_email":"test@example.com","subject":"Where is my order?","body":"I ordered #1042 last week and it has not arrived."}'
 ```
 
+Or run the full proof in one command — health, dashboard, widget bundle, ticket → order resolution, and refund idempotency (no money moves by default):
+
+```bash
+python scripts/smoke_live.py                    # exits 0 only if every check passes
+python scripts/smoke_live.py --money 1004       # opt-in: also proves one real $1 refund + replay
+```
+
 Dashboard: **http://localhost:5173**
 
 ---
@@ -640,8 +647,8 @@ pip install -r requirements-dev.txt
 # Run all Python tests (no network needed — everything mocked)
 pytest tests/ -v
 
-# Run with coverage
-pytest tests/ --cov=agent --cov=api --cov=integrations --cov-report=term-missing
+# Run with coverage (CI enforces an 80% floor on agent/api/integrations; actual is ~83%)
+pytest tests/ --cov=agent --cov=api --cov=integrations --cov-report=term --cov-fail-under=80
 ```
 
 All tests are **fully isolated** — each gets its own temp SQLite database, and all LLM/Shopify/Gorgias calls are mocked. No API keys, no network, no flakiness.
@@ -678,15 +685,33 @@ The eval dataset includes **2 adversarial prompt-injection cases** that verify t
 
 The unit suite proves the logic with fakes; money-touching integrations are proven manually against a real Shopify development store. [`REAL_STORE_VERIFICATION.md`](REAL_STORE_VERIFICATION.md) is the step-by-step runbook (order actions, all five subscription operations, ShipEngine label purchase with cost checks, per-store isolation, safety gates) with explicit pass criteria - run it before trusting the agent with a paying client.
 
+### Live Smoke Test
+
+```bash
+# With the stack running (scripts/dev.ps1 start) — ~2 minutes, PASS/FAIL per check:
+python scripts/smoke_live.py
+
+# Against a deployed instance:
+python scripts/smoke_live.py --base https://cs-agent-xxxx.onrender.com --api-key KEY --skip-dashboard
+
+# Opt-in money path: one real $1 refund, then the same Idempotency-Key replayed —
+# asserts the replay returns the same refund id and Shopify's refund count moves by exactly 1:
+python scripts/smoke_live.py --money 1004
+```
+
+Safe by default: side effects are two local tickets and refund attempts that are rejected *before* Shopify is called. Rate-limit aware (paces refund calls, waits out the window once on 429). Exit code 0 only when every check passes — suitable as a deploy gate.
+
 ### CI Pipeline
 
 ```yaml
 # .github/workflows/ci.yml — On every push to main:
   1. Ruff lint + format check
-  2. pip-audit -r requirements.lock   # fails on any known Python CVE
-  3. pytest tests/ -v
-  4. Dashboard: npm audit (runtime, blocking) + tsc --noEmit + vitest + vite build
-  5. Docker image build (no push)
+  2. Env var sync check (.env.example vs render.yaml)
+  3. pip-audit -r requirements.lock   # fails on any known Python CVE
+  4. pytest with coverage gate (--cov-fail-under=80)
+  5. Dashboard: npm audit (runtime, blocking) + tsc --noEmit + vitest + vite build
+  6. Docker image build (no push)
+  7. Deploy to Render (main → Production, develop → Staging)
 ```
 
 ### Dependency Security
@@ -773,6 +798,7 @@ cs-agent/
 │
 ├── scripts/                    # Operational scripts
 │   ├── dev.ps1                 # Start/stop/status for API + dashboard
+│   ├── smoke_live.py           # 2-minute live stack proof (safe by default)
 │   ├── smoke_test.sh           # Post-deploy smoke test
 │   └── check_env_sync.py       # Verify .env.example ↔ render.yaml parity
 │
@@ -812,6 +838,9 @@ curl https://cs-agent-xxxx.onrender.com/health
 
 # Smoke test
 ./scripts/smoke_test.sh https://cs-agent-xxxx.onrender.com YOUR_API_KEY
+
+# Full-stack live proof (health, widget, ticket→order, refund idempotency)
+python scripts/smoke_live.py --base https://cs-agent-xxxx.onrender.com --api-key YOUR_API_KEY --skip-dashboard
 
 # Sync Shopify policies + products
 curl -X POST https://cs-agent-xxxx.onrender.com/support/knowledge-base/sync-shopify \
