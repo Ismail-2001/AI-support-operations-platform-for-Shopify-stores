@@ -506,3 +506,38 @@ def test_gorgias_webhook_idempotency_missing_event_id(client):
     assert r.json()["received"] is True
     assert r.json().get("duplicate") is not True
     assert call_count[0] == 1
+
+
+# ── Webhook secret policy: fail-closed outside development ──────
+
+
+def test_webhook_secret_missing_fails_closed_in_production(monkeypatch):
+    """ENV=production with no secret configured must refuse to accept
+    unauthenticated webhooks (500) instead of silently allowing them."""
+    from fastapi import HTTPException
+
+    from agent.auth import check_shared_secret
+
+    monkeypatch.setattr(settings, "ENV", "production")
+    with pytest.raises(HTTPException) as exc:
+        check_shared_secret(None, None, "inbound webhook")
+    assert exc.value.status_code == 500
+    assert "not configured" in str(exc.value.detail)
+
+
+def test_webhook_secret_missing_allowed_in_development(monkeypatch):
+    from agent.auth import check_shared_secret
+
+    monkeypatch.setattr(settings, "ENV", "development")
+    check_shared_secret(None, None, "inbound webhook")  # must not raise
+
+
+def test_webhook_secret_wrong_value_rejected_in_production(monkeypatch):
+    from fastapi import HTTPException
+
+    from agent.auth import check_shared_secret
+
+    monkeypatch.setattr(settings, "ENV", "production")
+    with pytest.raises(HTTPException) as exc:
+        check_shared_secret("wrong", "right", "gorgias webhook")
+    assert exc.value.status_code == 401
