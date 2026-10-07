@@ -199,3 +199,96 @@ async def test_repeat_contact_does_not_downgrade_already_critical_priority(test_
     assert (
         d3.classification.priority == TicketPriority.CRITICAL
     ), "escalation must never LOWER priority"
+
+
+# ── H1: requester ↔ order identity binding ──────────────────────
+
+
+async def test_matching_email_grants_order_view():
+    from agent.graph import requester_may_view_order
+    from agent.models import TicketChannel
+
+    ticket = SupportTicket(id="v1", customer_email="Buyer@Example.COM", subject="s", body="b")
+    assert requester_may_view_order(ticket, {"email": "buyer@example.com"}) is True
+    assert requester_may_view_order(ticket, {"customer": {"email": "buyer@example.com"}}) is True
+    chat_ticket = SupportTicket(
+        id="v2",
+        customer_email="buyer@example.com",
+        subject="s",
+        body="b",
+        channel=TicketChannel.CHAT,
+    )
+    assert requester_may_view_order(chat_ticket, {"email": "buyer@example.com"}) is True
+
+
+async def test_mismatched_email_denies_order_view():
+    from agent.graph import requester_may_view_order
+
+    ticket = SupportTicket(id="v3", customer_email="attacker@evil.test", subject="s", body="b")
+    assert requester_may_view_order(ticket, {"email": "victim@shop.test"}) is False
+    assert requester_may_view_order(ticket, {"customer": {"email": "victim@shop.test"}}) is False
+
+
+async def test_anonymous_chat_is_always_denied():
+    from agent.graph import requester_may_view_order
+    from agent.models import TicketChannel
+
+    guest = SupportTicket(
+        id="v4",
+        customer_email="guest+abcd1234@chat-widget.local",
+        subject="s",
+        body="b",
+        channel=TicketChannel.CHAT,
+    )
+    # Order has an identity and the guest has one - they cannot match.
+    assert requester_may_view_order(guest, {"email": "victim@shop.test"}) is False
+    # No identity on the order either - anonymous chat still gets nothing.
+    assert requester_may_view_order(guest, {}) is False
+
+
+async def test_internal_channel_without_comparable_identity_allows():
+    """Agent/operator tickets on orders with no email on file fall back to the
+    channel's own trust (X-API-Key / verified inbound), keeping internal flows working."""
+    from agent.graph import requester_may_view_order
+
+    ticket = SupportTicket(id="v5", customer_email="ops@agency.test", subject="s", body="b")
+    assert requester_may_view_order(ticket, {"name": "#1001"}) is True
+
+
+async def test_graph_denies_order_context_for_mismatched_chat_requester(test_store):
+    class FakeShopifyOrderWithEmail:
+        enabled = True
+
+        async def get_order_by_number(self, order_number):
+            return {
+                "id": 42,
+                "name": f"#{order_number}",
+                "email": "real-owner@shop.test",
+                "fulfillment_status": "unfulfilled",
+                "financial_status": "paid",
+                "line_items": [{"quantity": 1, "title": "Hoodie"}],
+                "total_price": "49.99",
+                "fulfillments": [],
+            }
+
+        def summarize_order(self, order):
+            return f"SECRET-CONTEXT {order['name']}"
+
+    from agent.models import TicketChannel
+
+    agent = _wire_agent(
+        test_store,
+        classifier=FakeClassifier(
+            category=TicketCategory.ORDER_STATUS, extracted_order_number="1042"
+        ),
+        shopify=FakeShopifyOrderWithEmail(),
+    )
+    ticket = SupportTicket(
+        id="t-h1",
+        customer_email="guest+deadbeef@chat-widget.local",
+        subject="Order",
+        body="where is order #1042?",
+        channel=TicketChannel.CHAT,
+    )
+    decision = await agent.handle_ticket(ticket)
+    assert decision.order_context_used is False

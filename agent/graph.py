@@ -22,6 +22,7 @@ from agent.models import (
     MessageSender,
     ResponseSuggestion,
     SupportTicket,
+    TicketChannel,
     TicketMessage,
     TicketPriority,
 )
@@ -30,6 +31,28 @@ from agent.observability import record_graph_step
 logger = structlog.get_logger(__name__)
 
 ORDER_RELEVANT_CATEGORIES = {"order_status", "shipping", "returns", "refund"}
+
+
+def requester_may_view_order(ticket: SupportTicket, order: dict[str, Any]) -> bool:
+    """Identity binding: may THIS requester see THIS order's details?
+
+    Order numbers are enumerable, so an order number alone must never authorize
+    disclosure — anyone could ask the public widget about someone else's order.
+    When both sides have an email address, they must match (case-insensitive,
+    checkout email or account email). Anonymous storefront chat with no verifiable
+    identity is always denied; operator-driven channels without comparable
+    identity data fall back to the channel's own trust (agent/X-API-Key)."""
+    requester = (ticket.customer_email or "").strip().lower()
+    order_emails = {
+        str(e).strip().lower()
+        for e in (order.get("email"), (order.get("customer") or {}).get("email"))
+        if e
+    }
+    if requester and order_emails:
+        return requester in order_emails
+    return ticket.channel != TicketChannel.CHAT
+
+
 KB_RELEVANT_CATEGORIES = {
     "product_question",
     "returns",
@@ -145,6 +168,21 @@ def build_agent_graph(classifier, response_engine, shopify):
         if not order:
             return {
                 "order_context": f"No order found matching '{order_number}'.",
+                "order_used": False,
+            }
+
+        if not requester_may_view_order(ticket, order):
+            logger.info(
+                "order_context_denied_identity",
+                ticket_id=ticket.id,
+                channel=ticket.channel.value,
+            )
+            return {
+                "order_context": (
+                    "IDENTITY NOT VERIFIED — the requester could not be matched to this "
+                    "order. Ask for the email address used at checkout and share NO order "
+                    "details (status, items, price, address, tracking) until it matches."
+                ),
                 "order_used": False,
             }
 
