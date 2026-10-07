@@ -262,11 +262,21 @@ describe("initWidget conversation", () => {
 
     await vi.waitFor(() => {
       expect(root.querySelector(".msg.customer")!.textContent).toBe("Where is my order?");
-      expect(root.querySelector(".msg.assistant")!.textContent).toContain("Hi! How can I help?");
+      expect(root.querySelector(".msg.assistant")!.textContent).toContain(
+        "will follow up with you shortly",
+      );
     });
     expect(root.querySelector(".typing")).toBeNull();
-    expect(root.querySelector(".chip")!.textContent).toBe("confidence 92%");
-    expect(root.querySelector(".chip.human")!.textContent).toBe("a human will follow up");
+    // The unreviewed draft must never reach the storefront.
+    expect(root.querySelector(".msg.assistant")!.textContent).not.toContain(
+      "Hi! How can I help?",
+    );
+    // Meta (chips + handoff) attaches after the reveal animation finishes.
+    await vi.waitFor(() => {
+      expect(root.querySelector(".chip.human")!.textContent).toBe("a human will follow up");
+    });
+    // No confidence chip on a held reply.
+    expect(root.querySelector(".chip:not(.human)")).toBeNull();
 
     const messageCall = fetchMock.mock.calls.find(([u]) => String(u).endsWith("/messages"))!;
     expect(String(messageCall[0])).toBe("https://api.test/chat/sessions/s1/messages");
@@ -283,6 +293,43 @@ describe("initWidget conversation", () => {
     expect(
       fetchMock.mock.calls.some(([u]) => String(u).endsWith("/chat/sessions/s1/handoff")),
     ).toBe(true);
+  });
+
+  it("shows the AI reply + confidence when no human follow-up is needed", async () => {
+    const sse = sseBody([
+      { event: "stage", data: { stage: "classify_ticket" } },
+      {
+        event: "message",
+        data: {
+          content: "Orders ship in 2-3 days.",
+          confidence: 0.95,
+          show_confidence: true,
+          needs_human: false,
+        },
+      },
+    ]);
+
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.includes("/chat/config")) return jsonResponse(CONFIG);
+      if (method === "POST" && url.endsWith("/chat/sessions"))
+        return jsonResponse({ session_id: "s1", history: [] });
+      if (method === "GET" && url.includes("/chat/sessions/s1"))
+        return jsonResponse({ session_id: "s1", history: [] });
+      if (url.endsWith("/messages")) return new Response(sse);
+      return jsonResponse({ error: "not found" }, 404);
+    });
+
+    const { root } = await start(fetchMock);
+    submit(root, "how fast is shipping?");
+    await vi.waitFor(() => {
+      expect(root.querySelector(".msg.assistant")!.textContent).toContain(
+        "Orders ship in 2-3 days.",
+      );
+    });
+    expect(root.querySelector(".chip")!.textContent).toBe("confidence 95%");
+    expect(root.querySelector(".chip.human")).toBeNull();
   });
 
   it("resumes a persisted session without creating a new one", async () => {

@@ -478,9 +478,20 @@ export async function initWidget(opts: WidgetOptions): Promise<{ destroy: () => 
           } else if (evt.event === "message") {
             typing.remove();
             handled = true;
+            const data = evt.data as Record<string, any>;
             const bubble = addBubble("assistant", "");
-            await revealText(bubble.el, String(evt.data.content ?? ""));
-            attachMessageMeta(bubble.el, evt.data);
+            // Never surface an unreviewed draft to the storefront: when a human
+            // should follow up, show a holding line instead — the draft itself
+            // stays in the dashboard for the agent to review and send.
+            const needsHuman = Boolean(data.needs_human);
+            const shown = needsHuman
+              ? "Thanks! A member of our team will follow up with you shortly."
+              : String(data.content ?? "");
+            await revealText(bubble.el, shown);
+            attachMessageMeta(
+              bubble.el,
+              needsHuman ? { ...data, show_confidence: false } : data
+            );
           } else if (evt.event === "error") {
             typing.remove();
             addBubble("error", String(evt.data.message || "Something went wrong. Please try again."));
