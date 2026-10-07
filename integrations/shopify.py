@@ -300,18 +300,24 @@ class ShopifyClient:
             if not parent_txn:
                 raise ValueError(f"No sale transaction found on order {order_id} to refund against")
 
+            refund_txn = {
+                "parent_id": parent_txn["id"],
+                "amount": f"{amount:.2f}",
+                "kind": "refund",
+                "gateway": parent_txn["gateway"],
+            }
+            # Multi-currency orders: the refund transaction must carry the
+            # PARENT's currency or Shopify rejects with 422 "Currency must
+            # match parent transaction" (caught live: CAD order under a USD
+            # shop currency). Single-currency orders are unaffected.
+            if parent_txn.get("currency"):
+                refund_txn["currency"] = parent_txn["currency"]
+
             payload = {
                 "refund": {
                     "notify": notify_customer,
                     "note": reason or "Refund issued via AI support agent (human-approved)",
-                    "transactions": [
-                        {
-                            "parent_id": parent_txn["id"],
-                            "amount": f"{amount:.2f}",
-                            "kind": "refund",
-                            "gateway": parent_txn["gateway"],
-                        }
-                    ],
+                    "transactions": [refund_txn],
                 }
             }
             if refund_line_items:
