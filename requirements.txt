@@ -6,7 +6,7 @@ langchain-google-genai==4.4.0
 langchain-openai==1.6.7
 python-dotenv==1.2.4
 httpx==0.28.1
-structlog==24.4.0
+structlog==26.1.0
 aiosqlite==0.20.0
 numpy==1.26.4
 langchain-anthropic==1.7.5
