@@ -258,7 +258,7 @@ def test_respond_failure_alerts_and_returns_502(client):
 
 
 def test_cost_cap_breach_sends_alert(client, monkeypatch):
-    c, _cs = client
+    _c, _cs = client
     from agent.observability import check_daily_cost_cap
     from agent.storage import store
 

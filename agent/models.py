@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class TicketCategory(str, Enum):
+class TicketCategory(StrEnum):
     ORDER_STATUS = "order_status"
     SHIPPING = "shipping"
     RETURNS = "returns"
@@ -19,7 +19,7 @@ class TicketCategory(str, Enum):
     OTHER = "other"
 
 
-class TicketPriority(str, Enum):
+class TicketPriority(StrEnum):
     LOW = "low"
     NORMAL = "normal"
     HIGH = "high"
@@ -27,7 +27,7 @@ class TicketPriority(str, Enum):
     CRITICAL = "critical"
 
 
-class TicketStatus(str, Enum):
+class TicketStatus(StrEnum):
     OPEN = "open"
     IN_PROGRESS = "in_progress"
     AWAITING_CUSTOMER = "awaiting_customer"
@@ -35,7 +35,7 @@ class TicketStatus(str, Enum):
     CLOSED = "closed"
 
 
-class TicketChannel(str, Enum):
+class TicketChannel(StrEnum):
     EMAIL = "email"
     CHAT = "chat"
     GORGIAS = "gorgias"
@@ -43,7 +43,7 @@ class TicketChannel(str, Enum):
     PHONE = "phone"
 
 
-class Sentiment(str, Enum):
+class Sentiment(StrEnum):
     VERY_NEGATIVE = "very_negative"
     NEGATIVE = "negative"
     NEUTRAL = "neutral"
@@ -71,7 +71,7 @@ class SupportTicket(BaseModel):
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
 
-class MessageSender(str, Enum):
+class MessageSender(StrEnum):
     CUSTOMER = "customer"
     AGENT = "agent"  # human agent
     AI = "ai"  # this bot, when it auto-sent
@@ -106,7 +106,7 @@ class ResponseSuggestion(BaseModel):
     suggested_action: SuggestedAction | None = None
 
 
-class SubscriptionOperation(str, Enum):
+class SubscriptionOperation(StrEnum):
     PAUSE = "pause"
     SKIP = "skip"
     CANCEL = "cancel"
@@ -114,7 +114,7 @@ class SubscriptionOperation(str, Enum):
     CHANGE_FREQUENCY = "change_frequency"
 
 
-class ActionType(str, Enum):
+class ActionType(StrEnum):
     REFUND = "refund"
     RESEND_ORDER = "resend_order"
     CANCEL_ORDER = "cancel_order"

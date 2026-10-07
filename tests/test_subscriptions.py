@@ -626,7 +626,7 @@ def test_subscription_action_update_address_requires_address(client):
 def test_subscription_action_degraded_provider_maps_to_409_and_audits(client):
     """No Recharge/Skio connected: the action endpoint must return the documented
     409 SUBSCRIPTION_NOT_CONNECTED (never a 500) AND leave a failed audit row."""
-    c, cs_module = client
+    c, _cs_module = client
     ticket_id = _create_ticket(c)
     # Real SubscriptionService (fixture cleared both tokens) - nothing patched.
 

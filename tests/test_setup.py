@@ -223,7 +223,7 @@ def test_voice_rejects_bad_email(client):
 
 
 def test_test_endpoint_returns_draft_and_persists_nothing(client):
-    c, cs_module = client
+    c, _cs_module = client
     before = c.get("/support/tickets", headers=AUTH).json()["total"]
 
     r = c.post(

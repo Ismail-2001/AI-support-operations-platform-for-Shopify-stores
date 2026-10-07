@@ -138,9 +138,9 @@ async def test_auto_send_blocked_for_refund_category_even_at_high_confidence(tes
         id="t7", customer_email="a@b.com", subject="Refund", body="I want a refund"
     )
     decision = await agent.handle_ticket(ticket)
-    assert (
-        decision.auto_sent is False
-    ), "refund category must never auto-send regardless of confidence"
+    assert decision.auto_sent is False, (
+        "refund category must never auto-send regardless of confidence"
+    )
 
 
 async def test_auto_send_blocked_when_suggested_action_present(test_store):
@@ -181,9 +181,9 @@ async def test_repeat_contact_forces_escalation_to_urgent(test_store):
     ticket = SupportTicket(id="t10", customer_email="a@b.com", subject="Q", body="msg 1")
     await agent.handle_ticket(ticket)
     d2 = await agent.handle_followup("t10", "msg 2")
-    assert (
-        d2.classification.priority == TicketPriority.NORMAL
-    ), "should not escalate before threshold"
+    assert d2.classification.priority == TicketPriority.NORMAL, (
+        "should not escalate before threshold"
+    )
 
     d3 = await agent.handle_followup("t10", "msg 3, still no answer!!")
     assert d3.classification.priority == TicketPriority.URGENT, "3rd contact must force-escalate"
@@ -196,9 +196,9 @@ async def test_repeat_contact_does_not_downgrade_already_critical_priority(test_
     await agent.handle_ticket(ticket)
     await agent.handle_followup("t11", "msg 2")
     d3 = await agent.handle_followup("t11", "msg 3")
-    assert (
-        d3.classification.priority == TicketPriority.CRITICAL
-    ), "escalation must never LOWER priority"
+    assert d3.classification.priority == TicketPriority.CRITICAL, (
+        "escalation must never LOWER priority"
+    )
 
 
 # ── H1: requester ↔ order identity binding ──────────────────────

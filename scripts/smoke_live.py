@@ -227,8 +227,7 @@ def main():
             {
                 "customer_email": "smoke-test@example.com",
                 "subject": "Smoke refund check",
-                "body": f"Please refund $1 of order #{args.money} as a goodwill gesture. "
-                "Thanks!",
+                "body": f"Please refund $1 of order #{args.money} as a goodwill gesture. Thanks!",
             },
             headers=auth,
             timeout=180,
@@ -265,7 +264,7 @@ def main():
     passed = sum(1 for _, s in RESULTS if s == "PASS")
     failed = [n for n, s in RESULTS if s == "FAIL"]
     skipped = sum(1 for _, s in RESULTS if s == "SKIP")
-    print(f"\n==== SMOKE: {passed} passed, {skipped} skipped, " f"{len(failed)} failed ====")
+    print(f"\n==== SMOKE: {passed} passed, {skipped} skipped, {len(failed)} failed ====")
     if failed:
         print("failed: " + ", ".join(failed))
     sys.exit(1 if failed else 0)

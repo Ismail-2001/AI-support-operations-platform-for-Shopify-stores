@@ -321,15 +321,15 @@ class TestNoWriteToolsSafety:
         tool_names = {tool["name"] for tool in TOOLS}
 
         expected = {"lookup_order", "search_knowledge_base", "get_ticket", "list_open_tickets"}
-        assert expected.issubset(
-            tool_names
-        ), f"Missing expected read-only tools. Expected {expected}, found {tool_names}"
+        assert expected.issubset(tool_names), (
+            f"Missing expected read-only tools. Expected {expected}, found {tool_names}"
+        )
 
     def test_tool_handlers_match_tool_list(self):
         """Verify TOOL_HANDLERS dict matches TOOLS list."""
         tool_names = {tool["name"] for tool in TOOLS}
         handler_names = set(TOOL_HANDLERS.keys())
 
-        assert (
-            tool_names == handler_names
-        ), f"Tool names ({tool_names}) don't match handler names ({handler_names})"
+        assert tool_names == handler_names, (
+            f"Tool names ({tool_names}) don't match handler names ({handler_names})"
+        )

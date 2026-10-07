@@ -221,15 +221,15 @@ def test_store_header_routes_writes_and_reads_to_isolated_db(client):
 
     store_file_ids = ticket_ids_in(multistore.store_db_path(sid))
     primary_ids = ticket_ids_in(settings.DB_PATH)
-    assert (
-        store_ticket_id in store_file_ids
-    ), f"store ticket missing from {multistore.store_db_path(sid)}: {store_file_ids}"
-    assert (
-        default_ticket_id in primary_ids
-    ), f"default ticket missing from primary DB: {primary_ids}"
-    assert (
-        default_ticket_id not in store_file_ids
-    ), f"default ticket leaked into store DB: {store_file_ids}"
+    assert store_ticket_id in store_file_ids, (
+        f"store ticket missing from {multistore.store_db_path(sid)}: {store_file_ids}"
+    )
+    assert default_ticket_id in primary_ids, (
+        f"default ticket missing from primary DB: {primary_ids}"
+    )
+    assert default_ticket_id not in store_file_ids, (
+        f"default ticket leaked into store DB: {store_file_ids}"
+    )
     assert store_ticket_id not in primary_ids, f"store ticket leaked into primary DB: {primary_ids}"
 
     store_view = c.get("/support/tickets", headers=hdrs).json()["tickets"]
@@ -903,7 +903,7 @@ def test_gorgias_webhook_store_path_routes_and_checks_store_secret(client):
     """Gorgias can't send headers, so each tenant configures a URL with its own
     store id: /support/webhooks/gorgias/<sid>/ticket-created. The store's OWN
     secret guards it; tickets/dedupe land in the store's DB."""
-    c, cs = client
+    c, _cs = client
     r = c.post(
         "/support/stores",
         headers=AUTH,

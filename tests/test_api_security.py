@@ -218,9 +218,9 @@ def test_refund_idempotency_replays_instead_of_double_refunding(client):
     assert r2.status_code == 200
     assert r1.json()["replayed"] is False
     assert r2.json()["replayed"] is True
-    assert (
-        fake_shopify.call_count == 1
-    ), "create_refund must only be called ONCE across both requests"
+    assert fake_shopify.call_count == 1, (
+        "create_refund must only be called ONCE across both requests"
+    )
 
 
 def test_refund_rejects_amount_exceeding_order_total(client):
@@ -357,9 +357,9 @@ def test_resend_order_idempotency_replays_instead_of_double_reordering(client):
     assert r2.status_code == 200
     assert r1.json()["replayed"] is False
     assert r2.json()["replayed"] is True
-    assert (
-        fake_shopify.call_count == 1
-    ), "create_reorder must only be called ONCE across both requests"
+    assert fake_shopify.call_count == 1, (
+        "create_reorder must only be called ONCE across both requests"
+    )
 
 
 def test_rate_limit_returns_429_when_exceeded(client):

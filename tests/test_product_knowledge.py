@@ -281,7 +281,7 @@ async def test_run_sync_incremental_then_prunes(kb_isolated):
 
 
 async def test_run_sync_reports_error_when_disabled(kb_isolated):
-    kb, init = kb_isolated
+    _kb, init = kb_isolated
     await init()
     import api.customer_support as cs
 

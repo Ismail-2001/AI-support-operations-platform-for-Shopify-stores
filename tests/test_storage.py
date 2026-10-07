@@ -283,9 +283,9 @@ async def test_calibration_report_flags_miscalibration(test_store):
 
     report = await test_store.get_calibration_report()
     high_bucket = report["buckets"]["0.90-1.00"]
-    assert (
-        high_bucket["edit_rate"] == 1.0
-    ), "a 100% edit rate at 0.9 confidence must be visible, not hidden"
+    assert high_bucket["edit_rate"] == 1.0, (
+        "a 100% edit rate at 0.9 confidence must be visible, not hidden"
+    )
 
 
 # -- Storage persistence (ephemeral detection) ----------------

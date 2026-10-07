@@ -1397,8 +1397,7 @@ async def approve_subscription_action(
         SubscriptionOperation.CANCEL: f"cancelled (reason: {req.reason})",
         SubscriptionOperation.UPDATE_ADDRESS: "shipping address updated",
         SubscriptionOperation.CHANGE_FREQUENCY: (
-            f"frequency changed to every {req.frequency.get('count')} "
-            f"{req.frequency.get('unit')}"
+            f"frequency changed to every {req.frequency.get('count')} {req.frequency.get('unit')}"
             if req.frequency
             else "frequency changed"
         ),

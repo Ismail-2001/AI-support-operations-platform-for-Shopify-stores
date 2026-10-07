@@ -169,9 +169,9 @@ async def test_cost_cap_breach_forces_auto_send_off_end_to_end(test_store):
     )
     decision = await agent.handle_ticket(ticket)
 
-    assert (
-        decision.auto_sent is False
-    ), "auto-send must be blocked once the daily cost cap is exceeded"
-    assert (
-        decision.suggestion.confidence == 0.95
-    ), "the ticket should still be classified/drafted normally"
+    assert decision.auto_sent is False, (
+        "auto-send must be blocked once the daily cost cap is exceeded"
+    )
+    assert decision.suggestion.confidence == 0.95, (
+        "the ticket should still be classified/drafted normally"
+    )
