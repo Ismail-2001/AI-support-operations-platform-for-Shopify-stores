@@ -6,7 +6,7 @@ pytest-asyncio==1.4.0
 pytest-cov==6.0.0
 
 # Linting & formatting
-ruff==0.6.9
+ruff==0.16.10
 
 # Dependency security audit (CI runs: pip-audit -r requirements.lock)
 pip-audit==2.10.1
