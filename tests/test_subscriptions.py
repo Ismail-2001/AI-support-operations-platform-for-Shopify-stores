@@ -649,16 +649,17 @@ def test_subscription_action_degraded_provider_maps_to_409_and_audits(client):
     assert audit["status"] == "failed"
     assert "connected" in audit["error"].lower()
 
-    # Replaying the failed key returns the stored failure, not a second attempt.
+    # Replaying the failed key returns the stored failure with the ORIGINAL
+    # error status — never HTTP 200 (a failed action must not replay as OK).
     r2 = c.post(
         f"/support/tickets/{ticket_id}/actions/subscription",
         headers={**AUTH, "Idempotency-Key": key},
         json={"subscription_id": "sub-1", "operation": "pause"},
     )
-    assert r2.status_code == 200
-    assert r2.json()["replayed"] is True
-    assert r2.json()["status"] == "failed"
-    assert r2.json()["error"]
+    assert r2.status_code == 409
+    assert r2.json()["error"] == "SUBSCRIPTION_NOT_CONNECTED"
+    assert r2.json()["details"]["replayed"] is True
+    assert "connected" in r2.json()["message"].lower()
 
 
 def test_subscription_guard_failure_maps_to_409_and_audits(client):

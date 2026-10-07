@@ -218,7 +218,7 @@ def storage_is_ephemeral(db_path: str | None = None) -> bool:
 
 class TicketStore:
     # Bump this when you add a migration. Each migration runs in order only once.
-    SCHEMA_VERSION = 5
+    SCHEMA_VERSION = 6
 
     def __init__(self, db_path: str | None = None):
         self.db_path = db_path or settings.DB_PATH
@@ -261,6 +261,7 @@ class TicketStore:
             3: self._migrate_v3,
             4: self._migrate_v4,
             5: self._migrate_v5,
+            6: self._migrate_v6,
         }
 
         for version in sorted(migrations.keys()):
@@ -347,6 +348,26 @@ class TicketStore:
         await db.execute(
             "CREATE INDEX IF NOT EXISTS idx_dead_letters_status ON dead_letters(status, created_at)"
         )
+
+    async def _migrate_v6(self, db):
+        """v6: idempotent-action replay fidelity.
+
+        http_status + error_code on every audit table so replaying a FAILED
+        attempt returns the ORIGINAL error status (never a misleading 200), and
+        claimed-but-unfinished keys ('in_progress') are distinguishable from
+        completed ones by the endpoints."""
+        for table in (
+            "refund_audit",
+            "resend_audit",
+            "action_audit",
+            "return_label_audit",
+        ):
+            cursor = await db.execute(f"PRAGMA table_info({table})")
+            columns = [row[1] for row in await cursor.fetchall()]
+            if "http_status" not in columns:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN http_status INTEGER")
+            if "error_code" not in columns:
+                await db.execute(f"ALTER TABLE {table} ADD COLUMN error_code TEXT")
 
     async def save(
         self,
@@ -727,9 +748,30 @@ class TicketStore:
                 if row["shopify_response"]
                 else None,
                 "error": row["error"],
+                "http_status": row["http_status"],
+                "error_code": row["error_code"],
                 "detail": json.loads(row["detail"]) if row["detail"] else None,
                 "created_at": row["created_at"],
             }
+
+    async def claim_refund_audit(
+        self, idempotency_key: str, ticket_id: str, order_id: str, amount: float, reason: str
+    ) -> bool:
+        """Atomically reserve `idempotency_key` BEFORE the side-effecting Shopify call.
+
+        Returns False when another request already owns or completed this key — the
+        caller must then replay that request's outcome instead of executing. This is
+        the single point that closes the check-then-act race: SQLite serializes the
+        INSERT, so exactly one caller can transition the key to 'in_progress'."""
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO refund_audit (idempotency_key, ticket_id, order_id, "
+                "amount, reason, status, created_at) VALUES (?, ?, ?, ?, ?, 'in_progress', ?)",
+                (idempotency_key, ticket_id, order_id, amount, reason, now),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def record_refund_audit(
         self,
@@ -742,12 +784,19 @@ class TicketStore:
         shopify_response: dict[str, Any] | None = None,
         error: str | None = None,
         detail: dict[str, Any] | None = None,
+        http_status: int | None = None,
+        error_code: str | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO refund_audit (idempotency_key, ticket_id, order_id, amount, reason, "
-                "status, shopify_response, error, detail, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "status, shopify_response, error, detail, created_at, http_status, error_code) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(idempotency_key) DO UPDATE SET "
+                "status = excluded.status, shopify_response = excluded.shopify_response, "
+                "error = excluded.error, detail = excluded.detail, "
+                "http_status = excluded.http_status, error_code = excluded.error_code",
                 (
                     idempotency_key,
                     ticket_id,
@@ -759,6 +808,8 @@ class TicketStore:
                     error,
                     json.dumps(detail) if detail else None,
                     now,
+                    http_status,
+                    error_code,
                 ),
             )
             await db.commit()
@@ -783,8 +834,23 @@ class TicketStore:
                 if row["shopify_response"]
                 else None,
                 "error": row["error"],
+                "http_status": row["http_status"],
+                "error_code": row["error_code"],
                 "created_at": row["created_at"],
             }
+
+    async def claim_resend_audit(self, idempotency_key: str, ticket_id: str, order_id: str) -> bool:
+        """Atomically reserve `idempotency_key` before creating the replacement order.
+        Returns False if another request already owns or completed this key."""
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO resend_audit (idempotency_key, ticket_id, order_id, "
+                "status, created_at) VALUES (?, ?, ?, 'in_progress', ?)",
+                (idempotency_key, ticket_id, order_id, now),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def record_resend_audit(
         self,
@@ -794,12 +860,19 @@ class TicketStore:
         status: str,
         shopify_response: dict[str, Any] | None = None,
         error: str | None = None,
+        http_status: int | None = None,
+        error_code: str | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO resend_audit (idempotency_key, ticket_id, order_id, status, "
-                "shopify_response, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "shopify_response, error, created_at, http_status, error_code) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(idempotency_key) DO UPDATE SET "
+                "status = excluded.status, shopify_response = excluded.shopify_response, "
+                "error = excluded.error, http_status = excluded.http_status, "
+                "error_code = excluded.error_code",
                 (
                     idempotency_key,
                     ticket_id,
@@ -808,6 +881,8 @@ class TicketStore:
                     json.dumps(shopify_response) if shopify_response else None,
                     error,
                     now,
+                    http_status,
+                    error_code,
                 ),
             )
             await db.commit()
@@ -834,8 +909,38 @@ class TicketStore:
                 if row["shopify_response"]
                 else None,
                 "error": row["error"],
+                "http_status": row["http_status"],
+                "error_code": row["error_code"],
                 "created_at": row["created_at"],
             }
+
+    async def claim_action_audit(
+        self,
+        idempotency_key: str,
+        ticket_id: str,
+        order_id: str,
+        action: str,
+        request: dict[str, Any],
+    ) -> bool:
+        """Atomically reserve `idempotency_key` before the side-effecting provider call.
+        Returns False if another request already owns or completed this key."""
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO action_audit (idempotency_key, ticket_id, order_id, "
+                "action, request_json, status, created_at) VALUES (?, ?, ?, ?, ?, "
+                "'in_progress', ?)",
+                (
+                    idempotency_key,
+                    ticket_id,
+                    order_id,
+                    action,
+                    json.dumps(request),
+                    now,
+                ),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def record_action_audit(
         self,
@@ -847,13 +952,20 @@ class TicketStore:
         status: str,
         shopify_response: dict[str, Any] | None = None,
         error: str | None = None,
+        http_status: int | None = None,
+        error_code: str | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO action_audit (idempotency_key, ticket_id, order_id, action, "
-                "request_json, status, shopify_response, error, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "request_json, status, shopify_response, error, created_at, http_status, "
+                "error_code) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(idempotency_key) DO UPDATE SET "
+                "status = excluded.status, shopify_response = excluded.shopify_response, "
+                "error = excluded.error, http_status = excluded.http_status, "
+                "error_code = excluded.error_code",
                 (
                     idempotency_key,
                     ticket_id,
@@ -864,6 +976,8 @@ class TicketStore:
                     json.dumps(shopify_response) if shopify_response else None,
                     error,
                     now,
+                    http_status,
+                    error_code,
                 ),
             )
             await db.commit()
@@ -913,8 +1027,26 @@ class TicketStore:
                 "cost_usd": row["cost_usd"],
                 "request": json.loads(row["request_json"]) if row["request_json"] else None,
                 "error": row["error"],
+                "http_status": row["http_status"],
+                "error_code": row["error_code"],
                 "created_at": row["created_at"],
             }
+
+    async def claim_return_label_audit(
+        self, idempotency_key: str, ticket_id: str, order_id: str, request: dict[str, Any]
+    ) -> bool:
+        """Atomically reserve `idempotency_key` before buying a paid return label.
+        Returns False if another request already owns or completed this key."""
+        now = datetime.now(UTC).isoformat()
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO return_label_audit (idempotency_key, ticket_id, "
+                "order_id, status, request_json, created_at) VALUES (?, ?, ?, "
+                "'in_progress', ?, ?)",
+                (idempotency_key, ticket_id, order_id, json.dumps(request), now),
+            )
+            await db.commit()
+            return cursor.rowcount == 1
 
     async def record_return_label_audit(
         self,
@@ -930,13 +1062,23 @@ class TicketStore:
         cost_usd: float | None = None,
         request: dict[str, Any] | None = None,
         error: str | None = None,
+        http_status: int | None = None,
+        error_code: str | None = None,
     ) -> None:
         now = datetime.now(UTC).isoformat()
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
                 "INSERT INTO return_label_audit (idempotency_key, ticket_id, order_id, status, "
                 "provider, label_id, label_url, tracking_number, carrier_service, cost_usd, "
-                "request_json, error, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "request_json, error, created_at, http_status, error_code) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(idempotency_key) DO UPDATE SET "
+                "status = excluded.status, provider = excluded.provider, "
+                "label_id = excluded.label_id, label_url = excluded.label_url, "
+                "tracking_number = excluded.tracking_number, "
+                "carrier_service = excluded.carrier_service, cost_usd = excluded.cost_usd, "
+                "request_json = excluded.request_json, error = excluded.error, "
+                "http_status = excluded.http_status, error_code = excluded.error_code",
                 (
                     idempotency_key,
                     ticket_id,
@@ -951,6 +1093,8 @@ class TicketStore:
                     json.dumps(request) if request else None,
                     error,
                     now,
+                    http_status,
+                    error_code,
                 ),
             )
             await db.commit()

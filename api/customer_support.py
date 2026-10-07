@@ -5,6 +5,7 @@ Endpoints for ticket ingestion (manual + Gorgias webhook), suggestions, response
 
 import json
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -393,6 +394,53 @@ async def _reject_cross_family_key(idempotency_key: str, own_table: str) -> None
         )
 
 
+def _replay_audit(
+    existing: dict[str, Any], build_success: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    """Replay the outcome recorded for an already-used Idempotency-Key.
+
+    - succeeded → the original 200 payload from `build_success`
+    - failed → the ORIGINAL error status + code. A failed money action must never
+      replay as HTTP 200 — the side effect never happened, and the client needs
+      the real status to decide whether to retry with a fresh key.
+    - in_progress → 409: a concurrent request with this key still holds the claim
+      and has not finished executing."""
+    status = existing.get("status")
+    if status == "in_progress":
+        raise APIError(
+            code="ACTION_IN_PROGRESS",
+            message=(
+                "A request with this Idempotency-Key is still being processed — "
+                "wait a moment and retry to receive its result"
+            ),
+            status=409,
+            details={"idempotency_key": existing.get("idempotency_key")},
+        )
+    if status == "failed":
+        raise APIError(
+            code=existing.get("error_code") or "ACTION_FAILED",
+            message=existing.get("error")
+            or "The original request with this Idempotency-Key failed",
+            status=int(existing.get("http_status") or 502),
+            details={"replayed": True},
+        )
+    return build_success()
+
+
+def _claim_lost(
+    existing: dict[str, Any] | None, build_success: Callable[[], dict[str, Any]]
+) -> dict[str, Any]:
+    """Handle losing the atomic claim race: another request already owns the key.
+    Re-read its row and replay whatever outcome it recorded (or is executing)."""
+    if existing is None:  # pragma: no cover - the row cannot vanish mid-request
+        raise APIError(
+            code="IDEMPOTENCY_CONTENTION",
+            message="Idempotency-Key contention — retry, generating a new key",
+            status=409,
+        )
+    return _replay_audit(existing, build_success)
+
+
 @router.post("/tickets/{ticket_id}/actions/refund", dependencies=[Depends(rate_limit_refund)])
 async def approve_refund(
     ticket_id: str,
@@ -412,17 +460,21 @@ async def approve_refund(
     refunded on this order (Shopify's `total_refunded` / `refunds` array) — repeated
     partial refunds can never drain more than the order was worth. Optionally pass
     `refund_line_items` to scope the refund to specific items for partial refunds."""
-    existing = await store.get_refund_audit(idempotency_key)
-    if existing:
-        logger.info(
-            "refund_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
-        )
+
+    def _refund_replay(existing: dict[str, Any]) -> dict[str, Any]:
         return {
             "ticket_id": existing["ticket_id"],
             "order_id": existing["order_id"],
             "refund": existing["shopify_response"],
             "replayed": True,
         }
+
+    existing = await store.get_refund_audit(idempotency_key)
+    if existing:
+        logger.info(
+            "refund_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
+        )
+        return _replay_audit(existing, lambda: _refund_replay(existing))
     await _reject_cross_family_key(idempotency_key, "refund_audit")
 
     row = await store.get(ticket_id)
@@ -505,6 +557,15 @@ async def approve_refund(
     if req.refund_line_items:
         refund_detail = {"line_items": [rli.model_dump() for rli in req.refund_line_items]}
 
+    # All validation passed — atomically claim the key BEFORE money moves, so a
+    # concurrent request with the same key can never reach create_refund twice.
+    if not await store.claim_refund_audit(
+        idempotency_key, ticket_id, order_id, req.amount, req.reason
+    ):
+        logger.info("refund_idempotent_race", idempotency_key=idempotency_key, ticket_id=ticket_id)
+        owner = await store.get_refund_audit(idempotency_key)
+        return _claim_lost(owner, lambda: _refund_replay(owner))
+
     try:
         refund_kwargs: dict[str, Any] = {
             "order_id": order_id,
@@ -526,6 +587,8 @@ async def approve_refund(
             status="failed",
             error=str(e),
             detail=refund_detail,
+            http_status=502,
+            error_code="REFUND_FAILED",
         )
         raise APIError(code="REFUND_FAILED", message=f"Refund failed: {e}", status=502) from e
 
@@ -569,17 +632,21 @@ async def approve_resend_order(
 
     Requires an `Idempotency-Key` header. If the same key is sent twice, the second call
     returns the FIRST call's result instead of creating a duplicate order."""
-    existing = await store.get_resend_audit(idempotency_key)
-    if existing:
-        logger.info(
-            "resend_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
-        )
+
+    def _resend_replay(existing: dict[str, Any]) -> dict[str, Any]:
         return {
             "ticket_id": existing["ticket_id"],
             "order_id": existing["order_id"],
             "resend": existing["shopify_response"],
             "replayed": True,
         }
+
+    existing = await store.get_resend_audit(idempotency_key)
+    if existing:
+        logger.info(
+            "resend_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
+        )
+        return _replay_audit(existing, lambda: _resend_replay(existing))
     await _reject_cross_family_key(idempotency_key, "resend_audit")
 
     row = await store.get(ticket_id)
@@ -601,6 +668,13 @@ async def approve_resend_order(
     if not order:
         raise_not_found("order", order_id)
 
+    # Claim the key before creating a duplicate order — a concurrent replay must
+    # never reach create_reorder twice.
+    if not await store.claim_resend_audit(idempotency_key, ticket_id, order_id):
+        logger.info("resend_idempotent_race", idempotency_key=idempotency_key, ticket_id=ticket_id)
+        owner = await store.get_resend_audit(idempotency_key)
+        return _claim_lost(owner, lambda: _resend_replay(owner))
+
     try:
         result = await _agent.shopify.create_reorder(
             order_id=order_id, notify_customer=req.notify_customer
@@ -608,7 +682,13 @@ async def approve_resend_order(
     except Exception as e:
         logger.error("resend_failed", ticket_id=ticket_id, order_id=order_id, error=str(e))
         await store.record_resend_audit(
-            idempotency_key, ticket_id, order_id, status="failed", error=str(e)
+            idempotency_key,
+            ticket_id,
+            order_id,
+            status="failed",
+            error=str(e),
+            http_status=502,
+            error_code="RESEND_FAILED",
         )
         raise APIError(code="RESEND_FAILED", message=f"Resend failed: {e}", status=502) from e
 
@@ -705,6 +785,15 @@ async def approve_cancel_order(
 
     Guards: the order must exist, must not already be cancelled, and must not be fulfilled
     (a shipped package is not cancellable — the customer needs a return/refund instead)."""
+
+    def _cancel_replay(existing: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "ticket_id": existing["ticket_id"],
+            "order_id": existing["order_id"],
+            "cancel": existing["shopify_response"],
+            "replayed": True,
+        }
+
     existing = await store.get_action_audit(idempotency_key)
     if existing and existing["action"] != "cancel_order":
         raise APIError(
@@ -717,12 +806,7 @@ async def approve_cancel_order(
         logger.info(
             "cancel_idempotent_replay", idempotency_key=idempotency_key, ticket_id=ticket_id
         )
-        return {
-            "ticket_id": existing["ticket_id"],
-            "order_id": existing["order_id"],
-            "cancel": existing["shopify_response"],
-            "replayed": True,
-        }
+        return _replay_audit(existing, lambda: _cancel_replay(existing))
     await _reject_cross_family_key(idempotency_key, "action_audit")
 
     row = await store.get(ticket_id)
@@ -763,11 +847,38 @@ async def approve_cancel_order(
             details={"fulfillment_status": fulfillment_status},
         )
 
+    # All state guards passed — claim the key before cancelling (inventory restock
+    # + customer notification are not reversible).
+    if not await store.claim_action_audit(
+        idempotency_key, ticket_id, order_id, "cancel_order", req.model_dump()
+    ):
+        logger.info("cancel_idempotent_race", idempotency_key=idempotency_key, ticket_id=ticket_id)
+        owner = await store.get_action_audit(idempotency_key)
+        if owner is not None and owner.get("action") != "cancel_order":
+            raise APIError(
+                code="IDEMPOTENCY_KEY_CONFLICT",
+                message=f"Idempotency-Key was already used for a different action "
+                f"('{owner['action']}') — generate a new key",
+                status=409,
+            )
+        return _claim_lost(owner, lambda: _cancel_replay(owner))
+
     try:
         result = await _agent.shopify.cancel_order(
             order_id=order_id, reason=req.reason, notify_customer=req.notify_customer
         )
     except ShopifyNotConfigured:
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            "cancel_order",
+            req.model_dump(),
+            status="failed",
+            error="Shopify is not configured",
+            http_status=400,
+            error_code="SHOPIFY_NOT_CONFIGURED",
+        )
         raise_not_configured("Shopify")
     except ValueError as e:
         await store.record_action_audit(
@@ -778,6 +889,8 @@ async def approve_cancel_order(
             req.model_dump(),
             status="failed",
             error=str(e),
+            http_status=409,
+            error_code="ORDER_CANNOT_CANCEL",
         )
         raise APIError(code="ORDER_CANNOT_CANCEL", message=str(e), status=409) from e
     except Exception as e:
@@ -790,6 +903,8 @@ async def approve_cancel_order(
             req.model_dump(),
             status="failed",
             error=str(e),
+            http_status=502,
+            error_code="CANCEL_FAILED",
         )
         raise APIError(code="CANCEL_FAILED", message=f"Cancel failed: {e}", status=502) from e
 
@@ -847,6 +962,16 @@ async def approve_edit_address(
     Guards: only unfulfilled/unshipped, non-cancelled orders can be edited — changing the
     address of a package already in transit would silently send it to the wrong place.
     The audit record stores BOTH the previous and the new address for the trail."""
+
+    def _edit_replay(existing: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "ticket_id": existing["ticket_id"],
+            "order_id": existing["order_id"],
+            "request": existing["request"],
+            "order": existing["shopify_response"],
+            "replayed": True,
+        }
+
     existing = await store.get_action_audit(idempotency_key)
     if existing and existing["action"] != "edit_address":
         raise APIError(
@@ -861,13 +986,7 @@ async def approve_edit_address(
             idempotency_key=idempotency_key,
             ticket_id=ticket_id,
         )
-        return {
-            "ticket_id": existing["ticket_id"],
-            "order_id": existing["order_id"],
-            "request": existing["request"],
-            "order": existing["shopify_response"],
-            "replayed": True,
-        }
+        return _replay_audit(existing, lambda: _edit_replay(existing))
     await _reject_cross_family_key(idempotency_key, "action_audit")
 
     row = await store.get(ticket_id)
@@ -911,9 +1030,39 @@ async def approve_edit_address(
     previous_address = order.get("shipping_address") or {}
     audit_request = {**req.model_dump(), "previous_address": previous_address}
 
+    # State guards passed — claim the key before the address actually changes.
+    if not await store.claim_action_audit(
+        idempotency_key, ticket_id, order_id, "edit_address", audit_request
+    ):
+        logger.info(
+            "edit_address_idempotent_race",
+            idempotency_key=idempotency_key,
+            ticket_id=ticket_id,
+        )
+        owner = await store.get_action_audit(idempotency_key)
+        if owner is not None and owner.get("action") != "edit_address":
+            raise APIError(
+                code="IDEMPOTENCY_KEY_CONFLICT",
+                message=f"Idempotency-Key was already used for a different action "
+                f"('{owner['action']}') — generate a new key",
+                status=409,
+            )
+        return _claim_lost(owner, lambda: _edit_replay(owner))
+
     try:
         result = await _agent.shopify.update_shipping_address(order_id, req.address)
     except ShopifyNotConfigured:
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id,
+            "edit_address",
+            audit_request,
+            status="failed",
+            error="Shopify is not configured",
+            http_status=400,
+            error_code="SHOPIFY_NOT_CONFIGURED",
+        )
         raise_not_configured("Shopify")
     except ValueError as e:
         await store.record_action_audit(
@@ -924,6 +1073,8 @@ async def approve_edit_address(
             audit_request,
             status="failed",
             error=str(e),
+            http_status=409,
+            error_code="ADDRESS_UPDATE_REJECTED",
         )
         raise APIError(code="ADDRESS_UPDATE_REJECTED", message=str(e), status=409) from e
     except Exception as e:
@@ -936,6 +1087,8 @@ async def approve_edit_address(
             audit_request,
             status="failed",
             error=str(e),
+            http_status=502,
+            error_code="EDIT_ADDRESS_FAILED",
         )
         raise APIError(
             code="EDIT_ADDRESS_FAILED", message=f"Address update failed: {e}", status=502
@@ -1093,6 +1246,17 @@ async def approve_subscription_action(
     - skip requires an upcoming charge
     - change_frequency accepts only day/week/month with count 1-60"""
     audit_action = f"subscription_{req.operation.value}"
+
+    def _subscription_replay(existing: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "ticket_id": existing["ticket_id"],
+            "subscription": (existing.get("shopify_response") or {}).get("subscription"),
+            "operation": req.operation.value,
+            "status": existing["status"],
+            "error": existing.get("error"),
+            "replayed": True,
+        }
+
     existing = await store.get_action_audit(idempotency_key)
     if existing and existing["action"] != audit_action:
         raise APIError(
@@ -1108,14 +1272,7 @@ async def approve_subscription_action(
             ticket_id=ticket_id,
             operation=req.operation.value,
         )
-        return {
-            "ticket_id": existing["ticket_id"],
-            "subscription": (existing.get("shopify_response") or {}).get("subscription"),
-            "operation": req.operation.value,
-            "status": existing["status"],
-            "error": existing.get("error"),
-            "replayed": True,
-        }
+        return _replay_audit(existing, lambda: _subscription_replay(existing))
     await _reject_cross_family_key(idempotency_key, "action_audit")
 
     row = await store.get(ticket_id)
@@ -1124,6 +1281,27 @@ async def approve_subscription_action(
 
     audit_request = req.model_dump(mode="json")
     service = _subscription_service(req.provider)
+
+    # Claim the key before the provider call (skip twice / cancel twice are both
+    # customer-visible mistakes a replay must never repeat).
+    if not await store.claim_action_audit(
+        idempotency_key, ticket_id, "", audit_action, audit_request
+    ):
+        logger.info(
+            "subscription_action_idempotent_race",
+            idempotency_key=idempotency_key,
+            ticket_id=ticket_id,
+            operation=req.operation.value,
+        )
+        owner = await store.get_action_audit(idempotency_key)
+        if owner is not None and owner.get("action") != audit_action:
+            raise APIError(
+                code="IDEMPOTENCY_KEY_CONFLICT",
+                message=f"Idempotency-Key was already used for a different action "
+                f"('{owner['action']}') — generate a new key",
+                status=409,
+            )
+        return _claim_lost(owner, lambda: _subscription_replay(owner))
 
     try:
         if req.operation == SubscriptionOperation.PAUSE:
@@ -1162,8 +1340,41 @@ async def approve_subscription_action(
             request=audit_request,
             status="failed",
             error=str(e),
+            http_status=e.status,
+            error_code=e.code,
         )
         raise APIError(code=e.code, message=str(e), status=e.status, details=e.details) from e
+    except APIError as e:
+        # Validation raised after the claim (address/frequency shape, unsupported
+        # op): record it so the key replays as the same 4xx instead of going
+        # stale 'in_progress' forever.
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id="",
+            action=audit_action,
+            request=audit_request,
+            status="failed",
+            error=e.detail if isinstance(e.detail, str) else json.dumps(e.detail),
+            http_status=e.status_code,
+            error_code=e.error_code,
+        )
+        raise
+    except Exception as e:
+        # Unexpected failure: finalize the claim so the key can never go stale
+        # 'in_progress' (which would 409 forever).
+        await store.record_action_audit(
+            idempotency_key,
+            ticket_id,
+            order_id="",
+            action=audit_action,
+            request=audit_request,
+            status="failed",
+            error=str(e),
+            http_status=500,
+            error_code="SUBSCRIPTION_ACTION_FAILED",
+        )
+        raise
 
     response_payload = {
         "subscription": after.model_dump(exclude={"raw"}),
@@ -1383,14 +1594,8 @@ async def approve_return_label(
     result instead of buying a second paid label. Eligibility (return window,
     shipped/refunded state) is re-verified server-side here — the dashboard's
     eligibility preview is advisory only."""
-    existing = await store.get_return_label_audit(idempotency_key)
-    if existing:
-        logger.info(
-            "return_label_idempotent_replay",
-            idempotency_key=idempotency_key,
-            ticket_id=ticket_id,
-            status=existing["status"],
-        )
+
+    def _label_replay(existing: dict[str, Any]) -> dict[str, Any]:
         return {
             "ticket_id": existing["ticket_id"],
             "order_id": existing["order_id"],
@@ -1404,6 +1609,16 @@ async def approve_return_label(
             "error": existing["error"],
             "replayed": True,
         }
+
+    existing = await store.get_return_label_audit(idempotency_key)
+    if existing:
+        logger.info(
+            "return_label_idempotent_replay",
+            idempotency_key=idempotency_key,
+            ticket_id=ticket_id,
+            status=existing["status"],
+        )
+        return _replay_audit(existing, lambda: _label_replay(existing))
     await _reject_cross_family_key(idempotency_key, "return_label_audit")
 
     row = await store.get(ticket_id)
@@ -1450,6 +1665,19 @@ async def approve_return_label(
 
     rma = req.rma_number or f"T-{ticket_id}"
     audit_request = req.model_dump(mode="json")
+
+    # Eligibility passed — claim the key before paying for a label.
+    if not await store.claim_return_label_audit(
+        idempotency_key, ticket_id, order_id, audit_request
+    ):
+        logger.info(
+            "return_label_idempotent_race",
+            idempotency_key=idempotency_key,
+            ticket_id=ticket_id,
+        )
+        owner = await store.get_return_label_audit(idempotency_key)
+        return _claim_lost(owner, lambda: _label_replay(owner))
+
     try:
         label = await shipengine.quote_and_buy(
             customer_address, rma_number=rma, rate_id=req.rate_id
@@ -1463,6 +1691,8 @@ async def approve_return_label(
             provider="shipengine",
             request=audit_request,
             error=str(e.detail),
+            http_status=e.status_code,
+            error_code=e.error_code,
         )
         raise
     except Exception as e:
@@ -1475,6 +1705,8 @@ async def approve_return_label(
             provider="shipengine",
             request=audit_request,
             error=str(e),
+            http_status=502,
+            error_code="RETURN_LABEL_FAILED",
         )
         raise APIError(
             code="RETURN_LABEL_FAILED", message=f"Return label failed: {e}", status=502

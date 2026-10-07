@@ -669,3 +669,109 @@ def test_edit_address_allowed_while_partially_fulfilled(client):
     assert r.status_code == 200, r.text
     assert fake.update_calls == 1
     assert fake.received_address["address1"] == VALID_ADDRESS["address1"]
+
+
+# ── Idempotency claim: C1 race + H3 failed-replay fidelity ────
+
+
+def test_refund_in_progress_key_replays_409_without_executing(client):
+    """A key whose original request is still executing (row 'in_progress') must
+    replay as 409 ACTION_IN_PROGRESS — never execute a second refund, never 200."""
+    c, cs_module = client
+    fake = FakeShopifyPartialRefund()
+    cs_module._agent.shopify = fake
+    ticket_id = _create_ticket(c)
+    _link_order(ticket_id)
+
+    import asyncio
+
+    import agent.storage as storage_module
+
+    claimed = asyncio.run(
+        storage_module.store.claim_refund_audit("held-key", ticket_id, "999", 5.0, "racing")
+    )
+    assert claimed is True
+
+    r = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund",
+        headers={**AUTH, "Idempotency-Key": "held-key"},
+        json={"amount": 5.0},
+    )
+    assert r.status_code == 409
+    assert r.json()["error"] == "ACTION_IN_PROGRESS"
+    assert fake.refund_calls == [], "no refund may execute while the key is held"
+
+
+def test_refund_failed_key_replays_original_failure_not_200(client):
+    """H3: once an attempt has failed, the key replays the ORIGINAL 502 + code.
+    It must never re-execute (a timeout may have moved money) and never 200."""
+    c, cs_module = client
+
+    class FlakyShopify(FakeShopifyPartialRefund):
+        def __init__(self):
+            super().__init__()
+            self.first = True
+
+        async def create_refund(self, **kwargs):
+            if self.first:
+                self.first = False
+                raise ValueError("gateway timeout")
+            self.refund_calls.append(kwargs)
+            return {"refund": {"id": 777}}
+
+    fake = FlakyShopify()
+    cs_module._agent.shopify = fake
+    ticket_id = _create_ticket(c)
+    _link_order(ticket_id)
+
+    r1 = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund",
+        headers={**AUTH, "Idempotency-Key": "flaky-1"},
+        json={"amount": 5.0},
+    )
+    assert r1.status_code == 502
+
+    # Shopify is healthy again — but the SAME key must not retry the money move.
+    r2 = c.post(
+        f"/support/tickets/{ticket_id}/actions/refund",
+        headers={**AUTH, "Idempotency-Key": "flaky-1"},
+        json={"amount": 5.0},
+    )
+    assert r2.status_code == 502
+    assert r2.json()["error"] == "REFUND_FAILED"
+    assert r2.json()["details"]["replayed"] is True
+    assert fake.refund_calls == [], "replaying a failed key must not re-execute"
+
+
+def test_refund_claim_contention_returns_409(client):
+    """Losing the atomic claim race (row appears between the initial read and the
+    INSERT OR IGNORE) replays the winner's outcome instead of executing."""
+    c, cs_module = client
+    fake = FakeShopifyPartialRefund()
+    cs_module._agent.shopify = fake
+    ticket_id = _create_ticket(c)
+    _link_order(ticket_id)
+
+    import agent.storage as storage_module
+
+    original_claim = storage_module.store.claim_refund_audit
+
+    async def loser_claim(key, tid, oid, amount, reason):
+        # Simulate a concurrent winner committing while we validated.
+        await original_claim(key, tid, oid, amount, reason)
+        return False
+
+    storage_module.store.claim_refund_audit = loser_claim
+    try:
+        r = c.post(
+            f"/support/tickets/{ticket_id}/actions/refund",
+            headers={**AUTH, "Idempotency-Key": "race-1"},
+            json={"amount": 5.0},
+        )
+    finally:
+        storage_module.store.claim_refund_audit = original_claim
+
+    # Winner held the key as in_progress → loser gets 409, no refund executed.
+    assert r.status_code == 409
+    assert r.json()["error"] in ("ACTION_IN_PROGRESS", "IDEMPOTENCY_CONTENTION")
+    assert fake.refund_calls == []

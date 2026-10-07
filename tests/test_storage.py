@@ -311,3 +311,49 @@ async def test_ticket_store_creates_parent_directory(tmp_path):
     store_obj = TicketStore(db_path=str(db_file))
     assert db_file.parent.is_dir(), "DB_PATH parent dir must exist before first connect"
     assert store_obj.db_path == str(db_file)
+
+
+async def test_claim_refund_audit_is_exclusive_and_finalizes_via_upsert(test_store):
+    """C1: exactly one caller can hold a key; record_* finalizes the claim row
+    (upsert) instead of colliding with its PRIMARY KEY."""
+    first = await test_store.claim_refund_audit("claim-1", "t1", "o1", 1.0, "r")
+    second = await test_store.claim_refund_audit("claim-1", "t2", "o2", 2.0, "r")
+    assert first is True
+    assert second is False, "second claim on the same key must lose"
+
+    held = await test_store.get_refund_audit("claim-1")
+    assert held["status"] == "in_progress"
+
+    await test_store.record_refund_audit(
+        "claim-1",
+        "t1",
+        "o1",
+        1.0,
+        "r",
+        status="succeeded",
+        shopify_response={"id": 42},
+        http_status=200,
+    )
+    done = await test_store.get_refund_audit("claim-1")
+    assert done["status"] == "succeeded"
+    assert done["shopify_response"] == {"id": 42}
+    assert done["http_status"] == 200
+
+
+async def test_failed_audit_stores_http_status_and_error_code(test_store):
+    """H3: failure replays need the ORIGINAL status + machine code (v6 columns)."""
+    await test_store.record_refund_audit(
+        "fail-1",
+        "t1",
+        "o1",
+        5.0,
+        "r",
+        status="failed",
+        error="gateway declined",
+        http_status=502,
+        error_code="REFUND_FAILED",
+    )
+    row = await test_store.get_refund_audit("fail-1")
+    assert row["status"] == "failed"
+    assert row["http_status"] == 502
+    assert row["error_code"] == "REFUND_FAILED"
